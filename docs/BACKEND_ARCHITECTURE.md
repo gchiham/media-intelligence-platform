@@ -100,13 +100,13 @@ API (routers)  →  Service (application, orquesta reglas de negocio)  →  Repo
 ```
 
 - **`repositories.py`**: subclases de `Repository[T]` (nuevo, `src/infrastructure/db/repository.py`) — CRUD genérico (`get_by_id`, `list`, `add`, `commit`) ya funcional (es infraestructura, no lógica de negocio). Consultas específicas de negocio (filtros por tenant, por estado, etc.) se agregan en la siguiente fase.
-- **`services.py`**: una clase por módulo, con el/los repositorios inyectados por constructor. `PipelineRunService` ya tiene lógica real (ver abajo); el resto (`NoticiaService`, `MediaService`, `ClienteService`, `UsuarioService`) sigue siendo un stub — punto de extensión para cuando se implemente cada módulo.
+- **`services.py`**: una clase por módulo, con el/los repositorios inyectados por constructor. `PipelineRunService` y `NoticiaService` ya tienen lógica real (ver `EDITORIAL_DOMAIN.md` para `NoticiaService`); el resto (`MediaService`, `ClienteService`, `UsuarioService`) sigue siendo un stub — punto de extensión para cuando se implemente cada módulo.
 - **`models.py`**: ya existían para auth/editorial/media (con migraciones generadas); `pipeline/models.py` es nuevo, migrado en esta fase (`alembic/versions/f142223dde8b_*.py`).
 
 | Módulo | Modelo(s) | Repository | Service |
 |---|---|---|---|
 | `pipeline` | `PipelineRun` | `PipelineRunRepository` | `PipelineRunService` — **implementado**, ver abajo |
-| `editorial` | `Noticia`, `NoticiaVersion` (+ lo demás que ya existía) | `NoticiaRepository`, `NoticiaVersionRepository` | `NoticiaService` — stub |
+| `editorial` | `Noticia`, `NoticiaVersion` (+ lo demás que ya existía) | `NoticiaRepository`, `NoticiaVersionRepository` | `NoticiaService` — **implementado**, ver `EDITORIAL_DOMAIN.md` |
 | `media` | `Medio`, `Programa` | `MedioRepository`, `ProgramaRepository` | `MediaService` — stub |
 | `clients` | `Tenant` (importado desde `auth`) | `TenantRepository` | `ClienteService` — stub |
 | `auth` | `Usuario` (+ `Tenant`, `LoginEvent`) | `UsuarioRepository` | `UsuarioService` — stub |
@@ -174,7 +174,7 @@ Ya resuelto en esta fase (dejado aquí tachado, no borrado, para que quede el hi
 Pendiente:
 
 - Conectar `get_session()` a los repositorios vía dependency injection de FastAPI (`Depends`) — hoy `PipelineRunService` se instancia a mano en el test, no desde un endpoint.
-- Módulo **Editorial**: es el siguiente en la lista según lo acordado — lógica real en `NoticiaService` (cola de trabajo, aprobación, versionado al editar, llenar `resumen`/`transcripcion_texto`).
+- ~~Módulo Editorial: lógica real en `NoticiaService`~~ — hecho, ver `docs/EDITORIAL_DOMAIN.md` (cola FIFO, bloqueo, versionado, aprobar/rechazar, 9 tests contra Postgres real).
 - Lógica real en el resto de `Service` stubs (`MediaService`, `ClienteService`, `UsuarioService`).
 - Endpoints reales en cada router.
 - Decidir quién dispara un `PipelineRun` en producción (¿el Backend lo inicia? ¿solo lo registra después de que otro sistema — S3 event, cron — lo hizo?) — deliberadamente sin resolver todavía.

@@ -50,6 +50,15 @@ class Noticia(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     clip_inicio_seg: Mapped[float] = mapped_column(Float, nullable=False)
     clip_fin_seg: Mapped[float] = mapped_column(Float, nullable=False)
 
+    # Bloqueo editorial (FR-051): mientras un periodista tiene la noticia en
+    # EN_REVISION, queda asignada solo a el -- nadie mas puede editarla ni
+    # aprobarla/rechazarla. Se libera (vuelve a NULL) al aprobar o rechazar.
+    asignado_a: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("usuarios.id"), nullable=True, index=True
+    )
+    asignado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    motivo_rechazo: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class NoticiaVersion(Base, UUIDPrimaryKeyMixin):
     """Inmutable. Cada edicion -- incluso post-publicacion -- inserta una fila nueva. RN-003/FR-071."""
