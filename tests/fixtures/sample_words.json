@@ -1,0 +1,896 @@
+[
+  {
+    "index": 0,
+    "word": "suena",
+    "start": 0.0,
+    "end": 0.28
+  },
+  {
+    "index": 1,
+    "word": "la",
+    "start": 0.3,
+    "end": 0.58
+  },
+  {
+    "index": 2,
+    "word": "cortina",
+    "start": 0.6,
+    "end": 0.88
+  },
+  {
+    "index": 3,
+    "word": "musical",
+    "start": 0.9,
+    "end": 1.18
+  },
+  {
+    "index": 4,
+    "word": "de",
+    "start": 1.2,
+    "end": 1.48
+  },
+  {
+    "index": 5,
+    "word": "la",
+    "start": 1.5,
+    "end": 1.78
+  },
+  {
+    "index": 6,
+    "word": "estacion",
+    "start": 1.8,
+    "end": 2.08
+  },
+  {
+    "index": 7,
+    "word": "buenas",
+    "start": 2.1,
+    "end": 2.38
+  },
+  {
+    "index": 8,
+    "word": "tardes",
+    "start": 2.4,
+    "end": 2.68
+  },
+  {
+    "index": 9,
+    "word": "son",
+    "start": 2.7,
+    "end": 2.98
+  },
+  {
+    "index": 10,
+    "word": "las",
+    "start": 3.0,
+    "end": 3.28
+  },
+  {
+    "index": 11,
+    "word": "tres",
+    "start": 3.3,
+    "end": 3.58
+  },
+  {
+    "index": 12,
+    "word": "de",
+    "start": 3.6,
+    "end": 3.88
+  },
+  {
+    "index": 13,
+    "word": "la",
+    "start": 3.9,
+    "end": 4.18
+  },
+  {
+    "index": 14,
+    "word": "tarde",
+    "start": 4.2,
+    "end": 4.48
+  },
+  {
+    "index": 15,
+    "word": "aqui",
+    "start": 4.5,
+    "end": 4.78
+  },
+  {
+    "index": 16,
+    "word": "radio",
+    "start": 4.8,
+    "end": 5.08
+  },
+  {
+    "index": 17,
+    "word": "satelite",
+    "start": 5.1,
+    "end": 5.38
+  },
+  {
+    "index": 18,
+    "word": "con",
+    "start": 5.4,
+    "end": 5.68
+  },
+  {
+    "index": 19,
+    "word": "las",
+    "start": 5.7,
+    "end": 5.98
+  },
+  {
+    "index": 20,
+    "word": "noticias",
+    "start": 6.0,
+    "end": 6.28
+  },
+  {
+    "index": 21,
+    "word": "del",
+    "start": 6.3,
+    "end": 6.58
+  },
+  {
+    "index": 22,
+    "word": "dia",
+    "start": 6.6,
+    "end": 6.88
+  },
+  {
+    "index": 23,
+    "word": "visitanos",
+    "start": 6.9,
+    "end": 7.18
+  },
+  {
+    "index": 24,
+    "word": "en",
+    "start": 7.2,
+    "end": 7.48
+  },
+  {
+    "index": 25,
+    "word": "nuestra",
+    "start": 7.5,
+    "end": 7.78
+  },
+  {
+    "index": 26,
+    "word": "tienda",
+    "start": 7.8,
+    "end": 8.08
+  },
+  {
+    "index": 27,
+    "word": "de",
+    "start": 8.1,
+    "end": 8.38
+  },
+  {
+    "index": 28,
+    "word": "electrodomesticos",
+    "start": 8.4,
+    "end": 8.68
+  },
+  {
+    "index": 29,
+    "word": "los",
+    "start": 8.7,
+    "end": 8.98
+  },
+  {
+    "index": 30,
+    "word": "mejores",
+    "start": 9.0,
+    "end": 9.28
+  },
+  {
+    "index": 31,
+    "word": "precios",
+    "start": 9.3,
+    "end": 9.58
+  },
+  {
+    "index": 32,
+    "word": "de",
+    "start": 9.6,
+    "end": 9.88
+  },
+  {
+    "index": 33,
+    "word": "honduras",
+    "start": 9.9,
+    "end": 10.18
+  },
+  {
+    "index": 34,
+    "word": "compra",
+    "start": 10.2,
+    "end": 10.48
+  },
+  {
+    "index": 35,
+    "word": "ya",
+    "start": 10.5,
+    "end": 10.78
+  },
+  {
+    "index": 36,
+    "word": "el",
+    "start": 10.8,
+    "end": 11.08
+  },
+  {
+    "index": 37,
+    "word": "gobierno",
+    "start": 11.1,
+    "end": 11.38
+  },
+  {
+    "index": 38,
+    "word": "anuncio",
+    "start": 11.4,
+    "end": 11.68
+  },
+  {
+    "index": 39,
+    "word": "esta",
+    "start": 11.7,
+    "end": 11.98
+  },
+  {
+    "index": 40,
+    "word": "manana",
+    "start": 12.0,
+    "end": 12.28
+  },
+  {
+    "index": 41,
+    "word": "un",
+    "start": 12.3,
+    "end": 12.58
+  },
+  {
+    "index": 42,
+    "word": "nuevo",
+    "start": 12.6,
+    "end": 12.88
+  },
+  {
+    "index": 43,
+    "word": "programa",
+    "start": 12.9,
+    "end": 13.18
+  },
+  {
+    "index": 44,
+    "word": "de",
+    "start": 13.2,
+    "end": 13.48
+  },
+  {
+    "index": 45,
+    "word": "subsidio",
+    "start": 13.5,
+    "end": 13.78
+  },
+  {
+    "index": 46,
+    "word": "al",
+    "start": 13.8,
+    "end": 14.08
+  },
+  {
+    "index": 47,
+    "word": "transporte",
+    "start": 14.1,
+    "end": 14.38
+  },
+  {
+    "index": 48,
+    "word": "publico",
+    "start": 14.4,
+    "end": 14.68
+  },
+  {
+    "index": 49,
+    "word": "que",
+    "start": 14.7,
+    "end": 14.98
+  },
+  {
+    "index": 50,
+    "word": "beneficiara",
+    "start": 15.0,
+    "end": 15.28
+  },
+  {
+    "index": 51,
+    "word": "a",
+    "start": 15.3,
+    "end": 15.58
+  },
+  {
+    "index": 52,
+    "word": "mas",
+    "start": 15.6,
+    "end": 15.88
+  },
+  {
+    "index": 53,
+    "word": "de",
+    "start": 15.9,
+    "end": 16.18
+  },
+  {
+    "index": 54,
+    "word": "doscientas",
+    "start": 16.2,
+    "end": 16.48
+  },
+  {
+    "index": 55,
+    "word": "mil",
+    "start": 16.5,
+    "end": 16.78
+  },
+  {
+    "index": 56,
+    "word": "personas",
+    "start": 16.8,
+    "end": 17.08
+  },
+  {
+    "index": 57,
+    "word": "en",
+    "start": 17.1,
+    "end": 17.38
+  },
+  {
+    "index": 58,
+    "word": "tegucigalpa",
+    "start": 17.4,
+    "end": 17.68
+  },
+  {
+    "index": 59,
+    "word": "el",
+    "start": 17.7,
+    "end": 17.98
+  },
+  {
+    "index": 60,
+    "word": "ministro",
+    "start": 18.0,
+    "end": 18.28
+  },
+  {
+    "index": 61,
+    "word": "de",
+    "start": 18.3,
+    "end": 18.58
+  },
+  {
+    "index": 62,
+    "word": "finanzas",
+    "start": 18.6,
+    "end": 18.88
+  },
+  {
+    "index": 63,
+    "word": "dijo",
+    "start": 18.9,
+    "end": 19.18
+  },
+  {
+    "index": 64,
+    "word": "que",
+    "start": 19.2,
+    "end": 19.48
+  },
+  {
+    "index": 65,
+    "word": "el",
+    "start": 19.5,
+    "end": 19.78
+  },
+  {
+    "index": 66,
+    "word": "programa",
+    "start": 19.8,
+    "end": 20.08
+  },
+  {
+    "index": 67,
+    "word": "entra",
+    "start": 20.1,
+    "end": 20.38
+  },
+  {
+    "index": 68,
+    "word": "en",
+    "start": 20.4,
+    "end": 20.68
+  },
+  {
+    "index": 69,
+    "word": "vigencia",
+    "start": 20.7,
+    "end": 20.98
+  },
+  {
+    "index": 70,
+    "word": "la",
+    "start": 21.0,
+    "end": 21.28
+  },
+  {
+    "index": 71,
+    "word": "proxima",
+    "start": 21.3,
+    "end": 21.58
+  },
+  {
+    "index": 72,
+    "word": "semana",
+    "start": 21.6,
+    "end": 21.88
+  },
+  {
+    "index": 73,
+    "word": "y",
+    "start": 21.9,
+    "end": 22.18
+  },
+  {
+    "index": 74,
+    "word": "que",
+    "start": 22.2,
+    "end": 22.48
+  },
+  {
+    "index": 75,
+    "word": "se",
+    "start": 22.5,
+    "end": 22.78
+  },
+  {
+    "index": 76,
+    "word": "financiara",
+    "start": 22.8,
+    "end": 23.08
+  },
+  {
+    "index": 77,
+    "word": "con",
+    "start": 23.1,
+    "end": 23.38
+  },
+  {
+    "index": 78,
+    "word": "fondos",
+    "start": 23.4,
+    "end": 23.68
+  },
+  {
+    "index": 79,
+    "word": "del",
+    "start": 23.7,
+    "end": 23.98
+  },
+  {
+    "index": 80,
+    "word": "presupuesto",
+    "start": 24.0,
+    "end": 24.28
+  },
+  {
+    "index": 81,
+    "word": "general",
+    "start": 24.3,
+    "end": 24.58
+  },
+  {
+    "index": 82,
+    "word": "de",
+    "start": 24.6,
+    "end": 24.88
+  },
+  {
+    "index": 83,
+    "word": "la",
+    "start": 24.9,
+    "end": 25.18
+  },
+  {
+    "index": 84,
+    "word": "republica",
+    "start": 25.2,
+    "end": 25.48
+  },
+  {
+    "index": 85,
+    "word": "volvemos",
+    "start": 25.5,
+    "end": 25.78
+  },
+  {
+    "index": 86,
+    "word": "con",
+    "start": 25.8,
+    "end": 26.08
+  },
+  {
+    "index": 87,
+    "word": "mas",
+    "start": 26.1,
+    "end": 26.38
+  },
+  {
+    "index": 88,
+    "word": "musica",
+    "start": 26.4,
+    "end": 26.68
+  },
+  {
+    "index": 89,
+    "word": "en",
+    "start": 26.7,
+    "end": 26.98
+  },
+  {
+    "index": 90,
+    "word": "un",
+    "start": 27.0,
+    "end": 27.28
+  },
+  {
+    "index": 91,
+    "word": "momento",
+    "start": 27.3,
+    "end": 27.58
+  },
+  {
+    "index": 92,
+    "word": "no",
+    "start": 27.6,
+    "end": 27.88
+  },
+  {
+    "index": 93,
+    "word": "se",
+    "start": 27.9,
+    "end": 28.18
+  },
+  {
+    "index": 94,
+    "word": "vayan",
+    "start": 28.2,
+    "end": 28.48
+  },
+  {
+    "index": 95,
+    "word": "un",
+    "start": 28.5,
+    "end": 28.78
+  },
+  {
+    "index": 96,
+    "word": "accidente",
+    "start": 28.8,
+    "end": 29.08
+  },
+  {
+    "index": 97,
+    "word": "de",
+    "start": 29.1,
+    "end": 29.38
+  },
+  {
+    "index": 98,
+    "word": "transito",
+    "start": 29.4,
+    "end": 29.68
+  },
+  {
+    "index": 99,
+    "word": "en",
+    "start": 29.7,
+    "end": 29.98
+  },
+  {
+    "index": 100,
+    "word": "la",
+    "start": 30.0,
+    "end": 30.28
+  },
+  {
+    "index": 101,
+    "word": "carretera",
+    "start": 30.3,
+    "end": 30.58
+  },
+  {
+    "index": 102,
+    "word": "del",
+    "start": 30.6,
+    "end": 30.88
+  },
+  {
+    "index": 103,
+    "word": "norte",
+    "start": 30.9,
+    "end": 31.18
+  },
+  {
+    "index": 104,
+    "word": "dejo",
+    "start": 31.2,
+    "end": 31.48
+  },
+  {
+    "index": 105,
+    "word": "tres",
+    "start": 31.5,
+    "end": 31.78
+  },
+  {
+    "index": 106,
+    "word": "personas",
+    "start": 31.8,
+    "end": 32.08
+  },
+  {
+    "index": 107,
+    "word": "heridas",
+    "start": 32.1,
+    "end": 32.38
+  },
+  {
+    "index": 108,
+    "word": "esta",
+    "start": 32.4,
+    "end": 32.68
+  },
+  {
+    "index": 109,
+    "word": "madrugada",
+    "start": 32.7,
+    "end": 32.98
+  },
+  {
+    "index": 110,
+    "word": "segun",
+    "start": 33.0,
+    "end": 33.28
+  },
+  {
+    "index": 111,
+    "word": "bomberos",
+    "start": 33.3,
+    "end": 33.58
+  },
+  {
+    "index": 112,
+    "word": "el",
+    "start": 33.6,
+    "end": 33.88
+  },
+  {
+    "index": 113,
+    "word": "vehiculo",
+    "start": 33.9,
+    "end": 34.18
+  },
+  {
+    "index": 114,
+    "word": "se",
+    "start": 34.2,
+    "end": 34.48
+  },
+  {
+    "index": 115,
+    "word": "salio",
+    "start": 34.5,
+    "end": 34.78
+  },
+  {
+    "index": 116,
+    "word": "de",
+    "start": 34.8,
+    "end": 35.08
+  },
+  {
+    "index": 117,
+    "word": "la",
+    "start": 35.1,
+    "end": 35.38
+  },
+  {
+    "index": 118,
+    "word": "carretera",
+    "start": 35.4,
+    "end": 35.68
+  },
+  {
+    "index": 119,
+    "word": "cerca",
+    "start": 35.7,
+    "end": 35.98
+  },
+  {
+    "index": 120,
+    "word": "del",
+    "start": 36.0,
+    "end": 36.28
+  },
+  {
+    "index": 121,
+    "word": "kilometro",
+    "start": 36.3,
+    "end": 36.58
+  },
+  {
+    "index": 122,
+    "word": "veinte",
+    "start": 36.6,
+    "end": 36.88
+  },
+  {
+    "index": 123,
+    "word": "las",
+    "start": 36.9,
+    "end": 37.18
+  },
+  {
+    "index": 124,
+    "word": "autoridades",
+    "start": 37.2,
+    "end": 37.48
+  },
+  {
+    "index": 125,
+    "word": "investigan",
+    "start": 37.5,
+    "end": 37.78
+  },
+  {
+    "index": 126,
+    "word": "las",
+    "start": 37.8,
+    "end": 38.08
+  },
+  {
+    "index": 127,
+    "word": "causas",
+    "start": 38.1,
+    "end": 38.38
+  },
+  {
+    "index": 128,
+    "word": "del",
+    "start": 38.4,
+    "end": 38.68
+  },
+  {
+    "index": 129,
+    "word": "accidente",
+    "start": 38.7,
+    "end": 38.98
+  },
+  {
+    "index": 130,
+    "word": "y",
+    "start": 39.0,
+    "end": 39.28
+  },
+  {
+    "index": 131,
+    "word": "piden",
+    "start": 39.3,
+    "end": 39.58
+  },
+  {
+    "index": 132,
+    "word": "manejar",
+    "start": 39.6,
+    "end": 39.88
+  },
+  {
+    "index": 133,
+    "word": "con",
+    "start": 39.9,
+    "end": 40.18
+  },
+  {
+    "index": 134,
+    "word": "precaucion",
+    "start": 40.2,
+    "end": 40.48
+  },
+  {
+    "index": 135,
+    "word": "en",
+    "start": 40.5,
+    "end": 40.78
+  },
+  {
+    "index": 136,
+    "word": "esa",
+    "start": 40.8,
+    "end": 41.08
+  },
+  {
+    "index": 137,
+    "word": "zona",
+    "start": 41.1,
+    "end": 41.38
+  },
+  {
+    "index": 138,
+    "word": "por",
+    "start": 41.4,
+    "end": 41.68
+  },
+  {
+    "index": 139,
+    "word": "la",
+    "start": 41.7,
+    "end": 41.98
+  },
+  {
+    "index": 140,
+    "word": "lluvia",
+    "start": 42.0,
+    "end": 42.28
+  },
+  {
+    "index": 141,
+    "word": "gracias",
+    "start": 42.3,
+    "end": 42.58
+  },
+  {
+    "index": 142,
+    "word": "por",
+    "start": 42.6,
+    "end": 42.88
+  },
+  {
+    "index": 143,
+    "word": "escucharnos",
+    "start": 42.9,
+    "end": 43.18
+  },
+  {
+    "index": 144,
+    "word": "seguimos",
+    "start": 43.2,
+    "end": 43.48
+  },
+  {
+    "index": 145,
+    "word": "despues",
+    "start": 43.5,
+    "end": 43.78
+  },
+  {
+    "index": 146,
+    "word": "de",
+    "start": 43.8,
+    "end": 44.08
+  },
+  {
+    "index": 147,
+    "word": "la",
+    "start": 44.1,
+    "end": 44.38
+  },
+  {
+    "index": 148,
+    "word": "pausa",
+    "start": 44.4,
+    "end": 44.68
+  }
+]
