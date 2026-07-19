@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.infrastructure.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -42,3 +43,7 @@ class PipelineRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     finalizado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     noticias_generadas: Mapped[int] = mapped_column(Integer, default=0)
     error_mensaje: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # No se llama "metadata" -- ese nombre lo reserva SQLAlchemy en Base.metadata.
+    # Datos libres del procesamiento: proveedor de IA/modelo usado, batch_size,
+    # padding_seconds, duracion de cada paso, etc. Ver docs/BACKEND_ARCHITECTURE.md.
+    metadatos: Mapped[dict] = mapped_column(JSONB, default=dict)

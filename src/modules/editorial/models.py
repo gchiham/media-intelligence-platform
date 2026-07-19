@@ -32,6 +32,12 @@ class Noticia(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     grabacion_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("grabaciones.id"), nullable=False, index=True
     )
+    # Nullable: una Noticia podria eventualmente crearse sin pasar por el
+    # pipeline automatico (ej. carga manual futura). Cuando si viene del
+    # pipeline, referencia el PipelineRun que la genero.
+    pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pipeline_runs.id"), nullable=True, index=True
+    )
     estado: Mapped[EstadoNoticia] = mapped_column(
         Enum(EstadoNoticia, name="estado_noticia", values_callable=lambda x: [e.value for e in x]),
         nullable=False,

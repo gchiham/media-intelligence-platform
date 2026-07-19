@@ -100,16 +100,16 @@ API (routers)  →  Service (application, orquesta reglas de negocio)  →  Repo
 ```
 
 - **`repositories.py`**: subclases de `Repository[T]` (nuevo, `src/infrastructure/db/repository.py`) — CRUD genérico (`get_by_id`, `list`, `add`, `commit`) ya funcional (es infraestructura, no lógica de negocio). Consultas específicas de negocio (filtros por tenant, por estado, etc.) se agregan en la siguiente fase.
-- **`services.py`**: una clase por módulo, con el/los repositorios inyectados por constructor. Sin métodos de negocio todavía — son el punto de extensión donde la próxima fase agrega las reglas (ej. `NoticiaService.aprobar(...)`, `PipelineRunService.iniciar(...)`).
-- **`models.py`**: ya existían para auth/editorial/media (con migraciones generadas); `pipeline/models.py` es nuevo en esta fase.
+- **`services.py`**: una clase por módulo, con el/los repositorios inyectados por constructor. `PipelineRunService` ya tiene lógica real (ver abajo); el resto (`NoticiaService`, `MediaService`, `ClienteService`, `UsuarioService`) sigue siendo un stub — punto de extensión para cuando se implemente cada módulo.
+- **`models.py`**: ya existían para auth/editorial/media (con migraciones generadas); `pipeline/models.py` es nuevo, migrado en esta fase (`alembic/versions/f142223dde8b_*.py`).
 
 | Módulo | Modelo(s) | Repository | Service |
 |---|---|---|---|
-| `pipeline` | `PipelineRun` | `PipelineRunRepository` | `PipelineRunService` |
-| `editorial` | `Noticia`, `NoticiaVersion` (+ lo demás que ya existía) | `NoticiaRepository`, `NoticiaVersionRepository` | `NoticiaService` |
-| `media` | `Medio`, `Programa` | `MedioRepository`, `ProgramaRepository` | `MediaService` |
-| `clients` | `Tenant` (importado desde `auth`) | `TenantRepository` | `ClienteService` |
-| `auth` | `Usuario` (+ `Tenant`, `LoginEvent`) | `UsuarioRepository` | `UsuarioService` |
+| `pipeline` | `PipelineRun` | `PipelineRunRepository` | `PipelineRunService` — **implementado**, ver abajo |
+| `editorial` | `Noticia`, `NoticiaVersion` (+ lo demás que ya existía) | `NoticiaRepository`, `NoticiaVersionRepository` | `NoticiaService` — stub |
+| `media` | `Medio`, `Programa` | `MedioRepository`, `ProgramaRepository` | `MediaService` — stub |
+| `clients` | `Tenant` (importado desde `auth`) | `TenantRepository` | `ClienteService` — stub |
+| `auth` | `Usuario` (+ `Tenant`, `LoginEvent`) | `UsuarioRepository` | `UsuarioService` — stub |
 
 ## Modelo `PipelineRun`
 
@@ -117,17 +117,37 @@ API (routers)  →  Service (application, orquesta reglas de negocio)  →  Repo
 class PipelineRun(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "pipeline_runs"
 
-    grabacion_id: UUID          # FK -> grabaciones.id
-    estado: EstadoPipelineRun    # pendiente | en_progreso | completado | error
+    grabacion_id: UUID           # FK -> grabaciones.id
+    estado: EstadoPipelineRun     # pendiente | en_progreso | completado | error
     iniciado_at: datetime | None
     finalizado_at: datetime | None
     noticias_generadas: int
     error_mensaje: str | None
+    metadatos: dict               # JSONB -- padding_seconds, rutas de clips, segmentos detectados
 ```
 
-Una fila por intento de ejecutar el pipeline completo (transcripción → segmentación → clipping) sobre una `Grabacion`. Deliberadamente **no** tiene todavía relación hacia `Noticia` (no se agregó `pipeline_run_id` a la tabla `noticias` existente) — modificar una tabla ya migrada es más que "estructura", se deja para cuando se implemente el flujo real de creación de noticias desde un run.
+Una fila por intento de ejecutar el pipeline completo (transcripción → segmentación → clipping) sobre una `Grabacion`. `Noticia` ahora tiene `pipeline_run_id` (nullable, FK → `pipeline_runs.id`) — agregado en esta fase junto con la tabla `pipeline_runs` (migración `f142223dde8b`), aplicada contra PostgreSQL real (docker-compose local, no una base mock).
 
-Verificado: el modelo registra correctamente en `Base.metadata` junto a las 19 tablas ya existentes (`python -c "from src.infrastructure.db.registry import Base; print(Base.metadata.tables.keys())"` → incluye `pipeline_runs`). No se corrió ninguna migración de Alembic ni se conectó a PostgreSQL — eso es explícitamente la siguiente fase.
+## `PipelineRunService.run()` — persistencia real, validada contra PostgreSQL real
+
+```python
+def run(self, grabacion_id: uuid.UUID, job: ProcessAudioJob) -> PipelineRun: ...
+```
+
+Flujo:
+1. Crea `PipelineRun(estado=EN_PROGRESO, iniciado_at=now())` y lo **commitea de inmediato** — marca durable de que el run empezó, incluso si el proceso se cae después (NFR-012: trazabilidad de tareas asíncronas).
+2. Llama `MediaProcessingOrchestrator.process_audio(job)` **sin modificarlo** — el orquestador sigue siendo el mismo, agnóstico de base de datos, validado en fases anteriores.
+3. Por cada `ProcessedNews` devuelto: crea `Noticia` (con `pipeline_run_id` y `grabacion_id`) + `NoticiaVersion` inicial (`es_generada_por_ia=True`, `numero_version=1`), y enlaza `Noticia.version_actual_id`.
+4. Si todo sale bien: actualiza el `PipelineRun` a `COMPLETADO` con `noticias_generadas`, `finalizado_at`, y `metadatos` (padding usado, rutas de los clips generados, título+confianza de cada segmento detectado) — y **un solo commit** para todo el paso 3+4 (atómico: o se persisten todas las noticias de ese run junto con el estado final, o ninguna).
+5. Si algo falla: `rollback()` de lo pendiente (noticias a medias no quedan), y el `PipelineRun` (ya persistente desde el paso 1) se actualiza a `ERROR` con `error_mensaje`, en su propio commit.
+
+`resumen` y `transcripcion_texto` de `NoticiaVersion` quedan vacíos a propósito — llenarlos es responsabilidad del módulo Editorial, explícitamente fuera de alcance de esta fase (que solo valida que la persistencia del pipeline funcione de punta a punta, no el contenido editorial).
+
+**Validado end-to-end contra PostgreSQL real** (no mock, no SQLite): `tests/test_pipeline_run_service_e2e.py`, con OpenAI real + ffmpeg real + el fixture ya usado en sesiones anteriores (149 palabras, 2 noticias reales). Resultado: `PipelineRun` queda `COMPLETADO` con `noticias_generadas=2`, se crean 2 filas `Noticia` con `pipeline_run_id` correctamente enlazado, cada una con su `NoticiaVersion` (`numero_version=1`, `es_generada_por_ia=True`) y `version_actual_id` apuntando de vuelta correctamente. El test limpia sus propias filas al terminar (no deja basura en la base real).
+
+**Nota de proceso:** al generar la migración con `alembic revision --autogenerate`, además del cambio esperado (`pipeline_runs` + `noticias.pipeline_run_id`) aparecieron ~15 índices faltantes en columnas FK de otras tablas (`tenant_id`, `grabacion_id`, etc.) que ya estaban declaradas `index=True` en los modelos pero nunca se habían migrado — drift preexistente de antes de esta sesión. Se incluyeron en la misma migración porque son puramente aditivas (no borran ni modifican nada existente) y alinean la base real con modelos que ya estaban en el código.
+
+Migración aplicada contra PostgreSQL real (`alembic upgrade head`, docker-compose local en `localhost:5433`) — ver `alembic/versions/f142223dde8b_*.py`.
 
 ## API (FastAPI)
 
@@ -146,8 +166,16 @@ flowchart TD
 
 ## Qué falta explícitamente para la siguiente fase
 
-- Conectar `get_session()` a los repositorios vía dependency injection de FastAPI (`Depends`).
-- Lógica real en cada `Service` (reglas de negocio, validaciones, versión de `NoticiaVersion` al editar, etc.).
+Ya resuelto en esta fase (dejado aquí tachado, no borrado, para que quede el historial de qué cambió):
+
+- ~~Conectar PostgreSQL de verdad~~ — hecho, `alembic upgrade head` contra docker-compose local real.
+- ~~Hacer que `PipelineRunService` persista `PipelineRun`/`Noticia`/`NoticiaVersion`~~ — hecho e implementado, validado end-to-end con OpenAI + ffmpeg reales.
+
+Pendiente:
+
+- Conectar `get_session()` a los repositorios vía dependency injection de FastAPI (`Depends`) — hoy `PipelineRunService` se instancia a mano en el test, no desde un endpoint.
+- Módulo **Editorial**: es el siguiente en la lista según lo acordado — lógica real en `NoticiaService` (cola de trabajo, aprobación, versionado al editar, llenar `resumen`/`transcripcion_texto`).
+- Lógica real en el resto de `Service` stubs (`MediaService`, `ClienteService`, `UsuarioService`).
 - Endpoints reales en cada router.
-- Decidir y construir el flujo real que crea/actualiza un `PipelineRun` (¿el Backend dispara el run? ¿solo lo registra después de que otro sistema lo hizo?) — deliberadamente sin resolver en esta fase.
-- Conectar PostgreSQL de verdad (correr `alembic upgrade head` contra una base real, no solo local de desarrollo).
+- Decidir quién dispara un `PipelineRun` en producción (¿el Backend lo inicia? ¿solo lo registra después de que otro sistema — S3 event, cron — lo hizo?) — deliberadamente sin resolver todavía.
+- `ProcessAudioJob` sigue esperando archivos locales (`words_json_path`, `audio_path`) — todavía no hay integración con S3 real para que el Backend descargue automáticamente lo que produce chepita.
