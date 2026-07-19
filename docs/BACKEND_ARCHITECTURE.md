@@ -149,33 +149,39 @@ Flujo:
 
 Migración aplicada contra PostgreSQL real (`alembic upgrade head`, docker-compose local en `localhost:5433`) — ver `alembic/versions/f142223dde8b_*.py`.
 
-## API (FastAPI)
+## API (FastAPI) — implementada
 
-`src/api/main.py` — la app existe y arranca (verificado con `TestClient`, `GET /health` → `200 {"status": "ok"}`), con un router vacío por módulo ya incluido (`/auth`, `/clients`, `/news`, `/media`, `/pipeline-runs`) — listos para que la siguiente fase les agregue rutas, sin tener que tocar `main.py` de nuevo. Ningún endpoint de negocio implementado todavía, tal como se pidió.
+`src/api/main.py` — 6 endpoints reales bajo `/api/v1`: `POST /pipeline/process`, `GET /news/pending`, `POST /news/start-review`, `POST /news/{id}/draft`, `POST /news/{id}/approve`, `POST /news/{id}/reject`. Detalle completo (DTOs, ejemplos, mapeo de errores, la decisión de `RecordingResolver`) en **`docs/API.md`**. `auth`/`clients`/`media` siguen con routers vacíos, sin rutas.
 
-## Flujo (una vez implementado — no en esta fase)
+Los endpoints son transporte puro — validan el DTO, resuelven dependencias vía `Depends()` (`src/api/deps.py`), llaman a `PipelineRunService`/`NoticiaService` (sin cambios respecto a como ya estaban probados), y devuelven una respuesta. Cero lógica de negocio nueva; el dominio no se tocó.
+
+## Flujo (implementado)
 
 ```mermaid
 flowchart TD
     A[Cliente HTTP] --> B[Router]
-    B --> C[Service]
-    C --> D[Repository]
-    D --> E[(PostgreSQL)]
-    C -.futuro.-> F[Dispara/consulta PipelineRun<br/>ejecutado por workers externos]
+    B --> C["Depends(): sesion + service"]
+    C --> D[Service existente]
+    D --> E[Repository]
+    E --> F[(PostgreSQL)]
+    D -.dominio lanza.-> G[Excepcion tipada]
+    G -.exception_handler.-> H[HTTP con codigo correcto]
 ```
 
 ## Qué falta explícitamente para la siguiente fase
 
-Ya resuelto en esta fase (dejado aquí tachado, no borrado, para que quede el historial de qué cambió):
+Ya resuelto (dejado aquí tachado, no borrado, para que quede el historial):
 
-- ~~Conectar PostgreSQL de verdad~~ — hecho, `alembic upgrade head` contra docker-compose local real.
-- ~~Hacer que `PipelineRunService` persista `PipelineRun`/`Noticia`/`NoticiaVersion`~~ — hecho e implementado, validado end-to-end con OpenAI + ffmpeg reales.
+- ~~Conectar PostgreSQL de verdad~~ — hecho.
+- ~~Hacer que `PipelineRunService` persista `PipelineRun`/`Noticia`/`NoticiaVersion`~~ — hecho.
+- ~~Módulo Editorial: lógica real en `NoticiaService`~~ — hecho, ver `docs/EDITORIAL_DOMAIN.md`.
+- ~~Conectar `get_session()` a los repositorios vía `Depends()`~~ — hecho, ver `docs/API.md`.
+- ~~Endpoints reales en Pipeline y Editorial~~ — hecho, ver `docs/API.md`.
 
 Pendiente:
 
-- Conectar `get_session()` a los repositorios vía dependency injection de FastAPI (`Depends`) — hoy `PipelineRunService` se instancia a mano en el test, no desde un endpoint.
-- ~~Módulo Editorial: lógica real en `NoticiaService`~~ — hecho, ver `docs/EDITORIAL_DOMAIN.md` (cola FIFO, bloqueo, versionado, aprobar/rechazar, 9 tests contra Postgres real).
-- Lógica real en el resto de `Service` stubs (`MediaService`, `ClienteService`, `UsuarioService`).
-- Endpoints reales en cada router.
+- Autenticación/RBAC — `editor_id` hoy se recibe explícito en el body porque no hay forma de saber quién llama (ver nota en `docs/API.md`). Cuando exista auth, desaparece del body.
+- Lógica real en el resto de `Service` stubs (`MediaService`, `ClienteService`, `UsuarioService`) y sus endpoints.
 - Decidir quién dispara un `PipelineRun` en producción (¿el Backend lo inicia? ¿solo lo registra después de que otro sistema — S3 event, cron — lo hizo?) — deliberadamente sin resolver todavía.
-- `ProcessAudioJob` sigue esperando archivos locales (`words_json_path`, `audio_path`) — todavía no hay integración con S3 real para que el Backend descargue automáticamente lo que produce chepita.
+- Integración real con S3: hoy `RecordingResolver` (`src/modules/pipeline/resolvers.py`) solo tiene una implementación local (`LocalFileRecordingResolver`, busca archivos ya presentes en `settings.local_media_dir`). Migrar a S3 es agregar un `S3RecordingResolver` nuevo — ni el dominio ni los routers deberían cambiar.
+- Publicación al cliente (`ClienteNoticia`) cuando `approve()` lo requiera.

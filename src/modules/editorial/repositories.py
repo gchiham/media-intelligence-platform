@@ -24,6 +24,16 @@ class NoticiaRepository(Repository[Noticia]):
         )
         return self._session.scalars(stmt).first()
 
+    def listar_pendientes(self) -> list[Noticia]:
+        """Lectura de solo consulta (GET /news/pending) -- no toca estado ni
+        hace locking, a diferencia de `siguiente_pendiente_con_lock`."""
+        stmt = (
+            select(Noticia)
+            .where(Noticia.estado == EstadoNoticia.PENDIENTE)
+            .order_by(Noticia.created_at.asc())
+        )
+        return list(self._session.scalars(stmt))
+
 
 class NoticiaVersionRepository(Repository[NoticiaVersion]):
     """NewsVersion."""
