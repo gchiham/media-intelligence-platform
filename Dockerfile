@@ -16,6 +16,13 @@ COPY pyproject.toml ./
 COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./
+# scripts/ (seed_medios.py, discover_grabaciones.py, enqueue_transcriptions.py,
+# consume_transcription_results.py -- docs/INGESTION_DESIGN.md) se corren via
+# `docker compose exec backend python scripts/...`, no se instalan como
+# paquete. worker_prefetch.py tambien vive aca pero es para chepita, no se
+# ejecuta desde este contenedor -- se queda por simplicidad de un solo
+# directorio scripts/ en el repo.
+COPY scripts ./scripts
 
 RUN pip install --no-cache-dir .
 
