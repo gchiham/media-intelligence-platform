@@ -15,6 +15,31 @@ Cuenta AWS: `050871635829` (usuario `media-intelligence-dev`). Región: `us-east
 | `CHEPITA-L4-g6xlarge-20260719` | **`ami-098f304c0a5513eba`** | g6.xlarge, GPU L4 | Faster-Whisper Small, int8_float16, batch_size=24, word_timestamps, TranscriptionProvider + DLQ ya desplegados. **Usar este para relanzar chepita**, no el AMI viejo. |
 | `CHEPITA` (anterior, no usar para relanzar producción) | `ami-02b763fe7507a3a11` | — | Horneado desde la instancia de *bench* (T4), no de producción (L4) — el nombre es engañoso, quedó ahí de antes de esta sesión. |
 
+### Versionado de AMIs
+
+Semver (`vMAJOR.MINOR.PATCH`) en el **Name** del AMI — es el único campo confiable para versionar: AWS no permite renombrar un AMI después de creado, solo se puede fijar bien desde el `create-image` que lo genera. (No se pudo además usar un tag `Version` porque el usuario IAM `media-intelligence-dev` no tiene permiso `ec2:CreateTags` sobre AMIs — la tabla de abajo en este documento es la fuente de verdad del versionado, no un tag de AWS.)
+
+**Qué bump corresponde a qué cambio:**
+
+| Bump | Cuándo | Ejemplo |
+|---|---|---|
+| **MAJOR** (`vX.0.0`) | Cambio incompatible en la base horneada: SO, versión de CUDA/driver, arquitectura de GPU objetivo, versión de Python. Obliga a re-validar todo el pipeline desde cero (benchmarks incluidos, no solo el smoke test). | Migrar de L4 a otra GPU; salto de CUDA 12 a 13. |
+| **MINOR** (`vx.Y.0`) | Cambio compatible hacia atrás: nueva versión de `faster-whisper`/`torch`, código de worker nuevo desplegado (ej. el refactor de `TranscriptionProvider`, el manejo de errores con DLQ), nueva dependencia. El worker sigue comportándose igual para lo que ya funcionaba, solo se agregan capacidades. | Agregar `word_timestamps`, agregar el DLQ handler. |
+| **PATCH** (`vx.y.Z`) | Parche menor sin cambio de comportamiento: actualización de seguridad del SO, ajuste de config, fix de un bug puntual. | Actualizar paquetes del SO por seguridad. |
+
+**Proceso para hornear una versión nueva:**
+1. Confirmar que la instancia fuente pasa el smoke test (0 errores) — igual que se hizo para v1.0.0.
+2. `aws ec2 create-image --instance-id <id> --name "CHEPITA-L4-vX.Y.Z" --description "<qué cambio respecto a la version anterior, en <=255 caracteres>"`.
+3. Esperar a que quede `available`, registrar la fila nueva en la tabla de abajo (AMI ID, fecha, qué cambió, resultado de la validación).
+4. **No borrar la versión anterior de inmediato** — dejarla como rollback hasta confirmar que la nueva funciona en uso real, no solo en el smoke test.
+5. Cuando una versión vieja ya no haga falta (varias versiones más nuevas ya validadas en uso real), recién ahí `aws ec2 deregister-image` + borrar el snapshot asociado (`aws ec2 delete-snapshot`) para no acumular costo de storage indefinidamente.
+
+**Historial de versiones:**
+
+| Versión | AMI ID | Fecha | Qué cambió | Validación |
+|---|---|---|---|---|
+| `v1.0.0` | `ami-098f304c0a5513eba` | 2026-07-19 | Primera versión versionada formalmente (horneada antes de este esquema, el `Name` real en AWS quedó como `CHEPITA-L4-g6xlarge-20260719` — de aquí en adelante los `Name` sí siguen el esquema `vX.Y.Z`). Incluye: Faster-Whisper Small, int8_float16, batch_size=24, word_timestamps, `TranscriptionProvider`, manejo de errores con DLQ. | Smoke test 1 archivo, 2761 palabras, 0 errores, justo antes de capturar el AMI. |
+
 **Para relanzar chepita cuando se necesite:**
 ```bash
 aws ec2 run-instances --image-id ami-098f304c0a5513eba --instance-type g6.xlarge \
