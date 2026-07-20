@@ -1,6 +1,6 @@
 # BACKEND_ARCHITECTURE.md
 
-Diseño de la estructura del Backend principal de Media Intelligence Platform. **Solo estructura — sin lógica de negocio, sin conexión real a PostgreSQL, sin endpoints implementados.** Chepita (worker de transcripción) queda congelado; todo el desarrollo nuevo descrito aquí ocurre en este backend.
+Diseño de la estructura del Backend principal de Media Intelligence Platform. **Nota: la primera versión de este documento describía solo la estructura (sin lógica, sin PostgreSQL real, sin endpoints) — desde entonces se implementó todo eso; ver `docs/EDITORIAL_DOMAIN.md`, `docs/API.md` y `docs/DEPLOYMENT.md`.** Chepita (worker de transcripción) queda congelado; todo el desarrollo nuevo descrito aquí ocurre en este backend.
 
 ## Nota de naming — importante, léela antes de usar los modelos
 

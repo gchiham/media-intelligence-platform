@@ -23,14 +23,14 @@ Auditoría técnica de la base actual del proyecto (pipeline de segmentación + 
 
 | # | Riesgo | Detalle |
 |---|---|---|
-| R1 | **No hay repositorio git.** | `git status` en la raíz del proyecto devuelve "not a git repository". Todo el código de esta sesión (orquestador, providers, modelos) no tiene historial, no se puede diffear, no hay forma de revertir un cambio ni de abrir un PR. Es el riesgo más alto de toda la revisión — no es un problema de arquitectura de código, es la ausencia total de la red de seguridad básica antes de seguir construyendo. |
+| ~~R1~~ | ✅ **Resuelto** — **No había repositorio git.** | `git init` + primer commit se hizo poco después de esta revisión; el repo ya tiene historial completo y está en [GitHub](https://github.com/gchiham/media-intelligence-platform). |
 | ~~R2~~ | ✅ **Resuelto** — **El contrato `words.json` no tenía una fuente de verdad compartida.** | Ver [TRANSCRIPTION_ARCHITECTURE.md](TRANSCRIPTION_ARCHITECTURE.md). `Word` se define una sola vez en `src/modules/transcription/models/transcription_models.py`; `ai/schemas.py` la re-exporta (mismo objeto de clase, verificado). `worker_prefetch.py` serializa `Word.model_dump()` en vez de construir el dict a mano. |
-| R3 | **Cero manejo de errores en las llamadas a OpenAI.** | `_segment_chunk` no atrapa `RateLimitError`, `APIConnectionError`, ni el caso de `response.choices[0].message.content` viniendo `None`. Un fallo transitorio de red o un rate limit tumba todo `segment_news` sin reintento — y ya vimos en esta misma sesión que la cuenta de OpenAI puede devolver 429 sin previo aviso. |
-| R4 | **El worker de transcripción no tiene manejo de errores ni DLQ verificado.** | `worker.py`/`worker_prefetch.py` en chepita no envuelve `pipeline.transcribe(...)` ni la subida a S3 en un `try/except`. Si una excepción ocurre a mitad de un archivo, el mensaje SQS nunca se borra — vuelve a quedar visible tras el `VisibilityTimeout` (1800s) y se reintenta indefinidamente. `ARCHITECTURE.md` dice "Dead Letter Queues (DLQ) should be enabled", pero no hay evidencia de que la cola real tenga `maxReceiveCount`/DLQ configurado — un archivo corrupto podría reintentar para siempre sin que nadie se entere. |
-| R5 | **Despliegue del worker 100% manual y propenso a drift.** | `scripts/worker_prefetch.py` se sincroniza a `/home/ubuntu/worker.py` en chepita a mano, vía `base64` sobre SSM, en cada sesión. Ya documentado en `INFRASTRUCTURE.md`, pero vale repetirlo aquí como riesgo arquitectónico: no hay forma de saber, sin conectarse a la instancia, si el código desplegado coincide con el del repo en un momento dado. |
-| R6 | **Granularidad de transacción en `ingestion.py`.** | `sync_grabaciones` acumula inserts para *todos* los medios en una sola `Session` y hace `session.commit()` una sola vez al final del loop completo (`ingestion.py:106`). Un error no relacionado con duplicados (ej. una `ForeignKeyViolation` por un `programa_id` inconsistente a mitad del loop) descarta todo el trabajo acumulado de los medios anteriores, no solo el que falló. |
-| R7 | **Ausencia de logging estructurado, pese a estar exigido en `ARCHITECTURE.md`.** | El documento de arquitectura pide "Structured JSON logs" (sección 11) como parte del MVP. Lo que existe hoy es `print()` (`ingestion.py:82`) y una función `log()` casera con formato de texto plano en el worker de chepita — nada emite JSON, no hay niveles (`INFO`/`WARN`/`ERROR`), no hay `job_id` de correlación pese a que `NFR-012` lo pide explícitamente. |
-| R8 | **`ruff` está declarado como dependencia pero no configurado.** | `pyproject.toml` lista `ruff>=0.6` en `dev`, pero no hay sección `[tool.ruff]` ni `ruff.toml`. Sin reglas definidas, `ruff check` no aplica ningún estándar real — la herramienta está presente pero inerte. |
+| R3 | **Cero manejo de errores en las llamadas a OpenAI.** | Sigue abierto — `_segment_chunk` (`src/modules/ai/providers/openai_provider.py`) todavía no atrapa `RateLimitError`/`APIConnectionError` ni el caso de `content` viniendo `None`. `classify_and_wrap`/`TransientPipelineError` (`src/shared/errors.py`) ya existen y resuelven exactamente este problema — pero se construyeron para el DLQ del worker de transcripción (ver R4), no se conectaron a este archivo. Sigue siendo el próximo paso obvio si se quiere cerrar del todo. |
+| ~~R4~~ | ✅ **Resuelto** — **El worker de transcripción no tenía manejo de errores ni DLQ verificado.** | Ver [ERROR_HANDLING.md](ERROR_HANDLING.md). Excepciones tipadas (`TransientPipelineError`/`PermanentPipelineError`), backoff vía `ChangeMessageVisibility`, DLQ real verificada (`maxReceiveCount=3`, ya estaba configurada en AWS) con reenvío inmediato para errores permanentes. Validado contra AWS real, incluyendo un bug real encontrado y corregido en la clasificación de errores de S3. |
+| R5 | **Despliegue del worker 100% manual y propenso a drift.** | Sigue así — `scripts/worker_prefetch.py` se sincroniza a mano vía `base64` sobre SSM. Parcialmente mitigado desde entonces: existe un AMI horneado (`docs/INFRASTRUCTURE.md`, sección "Versionado de AMIs") que congela una versión conocida del entorno + código desplegado, pero seguir desplegando cambios de código a una instancia viva sigue siendo manual. |
+| R6 | **Granularidad de transacción en `ingestion.py`.** | Sigue abierto — `sync_grabaciones` sigue haciendo un solo `session.commit()` al final del loop completo (`ingestion.py:106`). No se tocó. |
+| ~~R7~~ | ✅ **Resuelto** — **Ausencia de logging estructurado, pese a estar exigido en `ARCHITECTURE.md`.** | `src/shared/logging_utils.py`: `logging` estándar + `JsonFormatter`, usado por el worker de transcripción (`ERROR_HANDLING.md`) y por el manejo de excepciones de la API (`docs/API.md`). `job_id`/`correlation_id` incluido en cada log de error. `ingestion.py` sigue usando `print()` para su único `[WARN]` — no se tocó, es de bajo impacto. |
+| R8 | **`ruff` está declarado como dependencia pero no configurado.** | Sigue abierto — `pyproject.toml` lista `ruff>=0.6` en `dev`, pero sigue sin `[tool.ruff]` ni `ruff.toml`. |
 
 ---
 
@@ -51,10 +51,10 @@ Auditoría técnica de la base actual del proyecto (pipeline de segmentación + 
 
 Estos no son bloqueantes para seguir prototipando localmente, pero sí antes de que el pipeline procese audio real de forma desatendida:
 
-- Resolver R1 (git) y R4 (DLQ) — son los dos únicos ítems de esta lista con riesgo real de pérdida de trabajo/reintento infinito.
-- Definir un timeout explícito en las llamadas a OpenAI (`OpenAI(api_key=..., timeout=...)`) — hoy usa el default del SDK, que puede ser más largo de lo razonable para un pipeline por lotes.
-- Decidir qué pasa con un archivo de audio que el worker de chepita falla en transcribir de forma consistente (¿cuántos reintentos antes de moverlo a una cola de "revisión manual"? Hoy la respuesta implícita es "reintenta para siempre").
-- Mover las constantes de infraestructura hardcodeadas (`BUCKET = "mediadev-recordings"` en `ingestion.py`, la URL de la cola SQS repetida en varios scripts) a `Settings`, para tener una sola fuente de verdad por ambiente (dev/prod).
+- ~~Resolver R1 (git) y R4 (DLQ)~~ — hechos, ver arriba.
+- Definir un timeout explícito en las llamadas a OpenAI (`OpenAI(api_key=..., timeout=...)`) — hoy usa el default del SDK, que puede ser más largo de lo razonable para un pipeline por lotes. Sigue sin hacerse.
+- ~~Decidir qué pasa con un archivo de audio que el worker de chepita falla en transcribir de forma consistente~~ — resuelto por el DLQ (R4): tras `maxReceiveCount=3` va a la DLQ automáticamente, o de inmediato si se clasifica como error permanente.
+- Mover las constantes de infraestructura hardcodeadas (`BUCKET = "mediadev-recordings"` en `ingestion.py`, la URL de la cola SQS repetida en varios scripts) a `Settings`, para tener una sola fuente de verdad por ambiente (dev/prod). Sigue sin hacerse.
 
 ---
 
@@ -82,12 +82,13 @@ No se identificaron más candidatos urgentes — el resto de los componentes (`c
 
 | Ítem | Impacto si no se paga |
 |---|---|
-| Sin git (R1) | Alto — cero trazabilidad, cero forma segura de experimentar |
-| `src/modules/transcription/` vacío, sin `TranscriptionProvider` en código | Alto a mediano plazo — bloquea abstraer infraestructura de transcripción sin tocar todo |
-| Sin logging estructurado / `job_id` (R7, NFR-012) | Medio — hoy no duele porque todo se opera a mano viendo logs de SSM; va a doler en cuanto haya más de un worker corriendo desatendido |
-| Cero tests unitarios (solo 1 test de integración end-to-end) | Medio — `chunking.py`, `mapping.py` (casos límite: padding que cruza 0, `audio_duration` menor al `end_time`), y la lógica de descarte de rangos inválidos en `openai_provider.py` no tienen ni un test unitario, solo quedaron validados manualmente en esta sesión |
-| `ruff` sin configurar (R8) | Bajo — por ahora el código es chico y se revisa a mano, pero la deuda crece con cada archivo nuevo |
-| Constantes de infraestructura hardcodeadas fuera de `Settings` | Bajo-Medio — hoy solo hay un ambiente (dev), pero duplicar `BUCKET`/queue URLs en varios archivos es exactamente el tipo de cosa que se desincroniza al agregar un ambiente de producción |
+| ~~Sin git (R1)~~ | **Resuelto** |
+| ~~`src/modules/transcription/` vacío, sin `TranscriptionProvider` en código~~ | **Resuelto** — ver `TRANSCRIPTION_ARCHITECTURE.md` |
+| ~~Sin logging estructurado / `job_id` (R7, NFR-012)~~ | **Resuelto** — ver `ERROR_HANDLING.md`/`API.md` |
+| ~~Cero tests unitarios (solo 1 test de integración end-to-end)~~ | **Resuelto** — 44 tests (unitarios + integración contra Postgres/OpenAI/ffmpeg reales) al momento de esta actualización |
+| `ruff` sin configurar (R8) | Bajo — sigue sin resolverse. Por ahora el código es chico y se revisa a mano, pero la deuda crece con cada archivo nuevo |
+| Constantes de infraestructura hardcodeadas fuera de `Settings` | Bajo-Medio — sigue sin resolverse (`BUCKET` en `ingestion.py`, URLs de SQS repetidas en scripts) |
+| Despliegue manual del worker de transcripción (R5) | Medio — parcialmente mitigado por el AMI versionado (`INFRASTRUCTURE.md`), pero desplegar cambios de código a una instancia viva sigue siendo manual |
 | `src/modules/clients/` vacío | Ninguno todavía — es simplemente scope futuro no iniciado, no es una regresión ni un descuido |
 
 ---
@@ -96,13 +97,13 @@ No se identificaron más candidatos urgentes — el resto de los componentes (`c
 
 | Prioridad | Ítem |
 |---|---|
-| **Alta** | Inicializar git (R1) |
-| **Alta** | Definir `TranscriptionProvider` como interfaz en código (aunque el único adapter siga siendo chepita por ahora) |
-| **Alta** | Verificar/configurar DLQ real en la cola SQS de transcripción (R4) |
-| **Media** | Compartir el esquema `Word` entre chepita y el backend, o al menos un test de contrato (R2) |
-| **Media** | Retries + excepción de dominio propia alrededor de las llamadas a OpenAI (R3) |
-| **Media** | Logging estructurado con `job_id` (R7, NFR-012) |
-| **Media** | Tests unitarios de `chunking.py`/`mapping.py`/validación de rangos en `openai_provider.py` |
+| ~~Alta~~ | ~~Inicializar git (R1)~~ — hecho |
+| ~~Alta~~ | ~~Definir `TranscriptionProvider` como interfaz en código~~ — hecho |
+| ~~Alta~~ | ~~Verificar/configurar DLQ real en la cola SQS de transcripción (R4)~~ — hecho |
+| ~~Media~~ | ~~Compartir el esquema `Word` entre chepita y el backend~~ — hecho (R2) |
+| **Media** | Retries + excepción de dominio propia alrededor de las llamadas a OpenAI en `openai_provider.py` (R3) — sigue pendiente, es lo único que queda abierto de prioridad Media/Alta |
+| ~~Media~~ | ~~Logging estructurado con `job_id` (R7, NFR-012)~~ — hecho |
+| ~~Media~~ | ~~Tests unitarios de `chunking.py`/`mapping.py`/validación de rangos~~ — hecho |
 | **Baja** | Configurar `[tool.ruff]` (R8) |
 | **Baja** | Partir el commit de `ingestion.py` por medio en vez de uno global (R6) |
 | **Baja** | Mover constantes de infraestructura hardcodeadas a `Settings` |
