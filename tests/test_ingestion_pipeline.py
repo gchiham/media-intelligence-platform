@@ -142,6 +142,13 @@ class TestDiscoveryService:
 
 class TestQueueService:
     def test_enqueues_pending_and_marks_procesando(self, session, medio_programa, cleanup_grabaciones):
+        # OJO: enqueue_pending() opera sobre *toda* la tabla grabaciones (sin
+        # filtro por estacion/fixture) -- contra un Postgres compartido que
+        # puede tener grabaciones PENDIENTE reales de otras fuentes, hay que
+        # revertir cualquier fila ajena que la corrida de la prueba haya
+        # tocado, no solo la propia. (Nos mordio una vez: una corrida de esta
+        # prueba en el Postgres real de produccion marco 500 grabaciones
+        # reales como PROCESANDO por accidente -- ver commit que agrego esta nota.)
         medio, programa = medio_programa
         grabacion = Grabacion(
             programa_id=programa.id,
@@ -163,23 +170,53 @@ class TestQueueService:
             output_bucket="output-bucket",
         )
 
-        result = service.enqueue_pending()
+        enqueued_ids: set[str] = set()
+        try:
+            # limit alto a proposito: si el Postgres tiene backlog real (miles
+            # de PENDIENTE con fecha_inicio mas vieja que la de esta prueba),
+            # un limit chico podria no llegar a tomar la fila de la prueba --
+            # el orden es por fecha_inicio ascendente, no de insercion.
+            result = service.enqueue_pending(limit=10000)
 
-        assert result.encoladas == 1
-        sqs.send_message.assert_called_once()
-        body = json.loads(sqs.send_message.call_args.kwargs["MessageBody"])
-        assert body["grabacion_id"] == str(grabacion.id)
-        assert body["station"] == medio.codigo
-        assert body["s3_input"] == f"s3://capture-bucket/{grabacion.s3_key}"
+            assert result.encoladas >= 1
+            enqueued_ids = {
+                json.loads(call.kwargs["MessageBody"])["grabacion_id"]
+                for call in sqs.send_message.call_args_list
+            }
+            assert str(grabacion.id) in enqueued_ids
 
-        session.refresh(grabacion)
-        assert grabacion.estado == EstadoGrabacion.PROCESANDO
+            own_call = next(
+                call for call in sqs.send_message.call_args_list
+                if json.loads(call.kwargs["MessageBody"])["grabacion_id"] == str(grabacion.id)
+            )
+            body = json.loads(own_call.kwargs["MessageBody"])
+            assert body["station"] == medio.codigo
+            assert body["s3_input"] == f"s3://capture-bucket/{grabacion.s3_key}"
 
-        # ya no aparece pendiente en una segunda pasada
-        sqs.reset_mock()
-        result2 = service.enqueue_pending()
-        assert result2.encoladas == 0
-        sqs.send_message.assert_not_called()
+            session.refresh(grabacion)
+            assert grabacion.estado == EstadoGrabacion.PROCESANDO
+
+            # ya no aparece pendiente en una segunda pasada
+            sqs.reset_mock()
+            service.enqueue_pending(limit=10000)
+            second_pass_ids = {
+                json.loads(call.kwargs["MessageBody"])["grabacion_id"]
+                for call in sqs.send_message.call_args_list
+            }
+            enqueued_ids |= second_pass_ids  # tambien hay que revertir estas en el finally
+            assert str(grabacion.id) not in second_pass_ids
+        finally:
+            # revertir cualquier grabacion ajena que esta pasada haya
+            # marcado PROCESANDO -- solo la nuestra debe quedar asi,
+            # el resto (si el Postgres tenia datos reales) vuelve a PENDIENTE.
+            other_ids = [uuid.UUID(gid) for gid in enqueued_ids if gid != str(grabacion.id)]
+            if other_ids:
+                session.execute(
+                    Grabacion.__table__.update()
+                    .where(Grabacion.id.in_(other_ids))
+                    .values(estado=EstadoGrabacion.PENDIENTE)
+                )
+                session.commit()
 
 
 class TestTranscriptionResultConsumer:
