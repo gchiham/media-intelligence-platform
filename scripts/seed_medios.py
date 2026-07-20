@@ -1,13 +1,19 @@
 """Siembra los medios reales (fuente de verdad: config/stations.json del repo mediaCAP)
 y un programa generico por medio (mediaCAP no distingue programas por horario todavia,
 solo graba continuo por hora). Idempotente: se puede correr varias veces sin duplicar.
+
+Uso: python scripts/seed_medios.py
 """
+import sys
+from pathlib import Path
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.infrastructure.db.engine import get_engine
-from src.modules.media.models import Medio, Programa, TipoMedio
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
+
+from src.infrastructure.db.engine import get_engine  # noqa: E402
+from src.modules.media.models import Medio, Programa, TipoMedio  # noqa: E402
 
 STATIONS = [
     ("xy_hrn", "XY HRN", "radio"),
