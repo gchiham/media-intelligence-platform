@@ -44,7 +44,12 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_intelligence}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?falta OPENAI_API_KEY en .env}
+      # Claude es el LLM primario -- obligatoria. OpenAI queda como respaldo
+      # (ver AIProviderWithFallback), por eso no es obligatoria: si falta,
+      # el fallback simplemente no tiene a donde caer si Claude falla.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?falta ANTHROPIC_API_KEY en .env}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       LOCAL_MEDIA_DIR: /data/recordings
     volumes:

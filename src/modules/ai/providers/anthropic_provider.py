@@ -1,38 +1,32 @@
-"""Adaptador OpenAI de AIAnalysisProvider, enfocado solo en segmentacion de
-noticias (FR-032). No hace clasificacion, resumen, entidades, sentimiento ni
-matching de cliente todavia -- esos son pasos posteriores del pipeline.
+"""Adaptador Claude (Anthropic) de AIAnalysisProvider -- mismo contrato y mismo
+enfoque que OpenAIAnalysisProvider (ver ese archivo para el detalle del
+diseno): el LLM solo ve indice de palabra, nunca segundos.
 
-El LLM solo ve texto con indice de palabra, nunca segundos -- el mapeo a tiempo
-real es responsabilidad de un paso determinista aparte (ver docs/PRD.md).
-
-Reintentos (R3 de docs/ARCHITECTURE_REVIEW.md): un rate limit o un blip de red
-no debe tumbar toda la segmentacion. `classify_and_wrap` (ya usado en el
-manejo de errores del worker de transcripcion, ver docs/ERROR_HANDLING.md)
-distingue error transitorio (reintentable, ej. 429/timeout) de permanente
-(ej. API key invalida) -- aqui el backoff es corto (segundos, no minutos)
-porque corre sincronico dentro de un request HTTP (POST /pipeline/process),
-a diferencia del backoff del worker SQS que puede esperar minutos."""
-import json
+No hay equivalente exacto al `response_format` json_schema strict de OpenAI en
+la API de Claude -- en su lugar se fuerza una tool call con `strict: True` y
+`tool_choice` fijo a esa tool, que da la misma garantia de forma de salida
+(ver skill claude-api, seccion "Structured Outputs" / "Strict tool use")."""
 import time
 
-from openai import OpenAI
+import anthropic
+from anthropic import Anthropic
 
 from src.modules.ai.chunking import chunk_words
 from src.modules.ai.exceptions import SegmentationError
 from src.modules.ai.providers.base import AIAnalysisProvider
-from src.modules.ai.providers.prompts import RESPONSE_SCHEMA as _RESPONSE_SCHEMA
-from src.modules.ai.providers.prompts import SYSTEM_PROMPT
-from src.modules.ai.providers.prompts import render_chunk as _render_chunk
+from src.modules.ai.providers.prompts import RESPONSE_SCHEMA, SYSTEM_PROMPT, render_chunk
 from src.modules.ai.schemas import NewsSegment, Word
 from src.shared.errors import PermanentPipelineError, TransientPipelineError, classify_and_wrap
 
 _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = [1, 2]  # espera antes del intento 2 y del intento 3
 
+_TOOL_NAME = "return_news_segments"
 
-class OpenAIAnalysisProvider(AIAnalysisProvider):
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", chunk_size: int = 600):
-        self._client = OpenAI(api_key=api_key)
+
+class AnthropicAnalysisProvider(AIAnalysisProvider):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-5", chunk_size: int = 600):
+        self._client = Anthropic(api_key=api_key)
         self._model = model
         self._chunk_size = chunk_size
 
@@ -62,22 +56,22 @@ class OpenAIAnalysisProvider(AIAnalysisProvider):
         last_error: TransientPipelineError | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
-                response = self._client.chat.completions.create(
+                response = self._client.messages.create(
                     model=self._model,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": _render_chunk(chunk)},
-                    ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "news_segments",
-                            "schema": _RESPONSE_SCHEMA,
+                    max_tokens=4096,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": render_chunk(chunk)}],
+                    tools=[
+                        {
+                            "name": _TOOL_NAME,
+                            "description": "Devuelve las noticias detectadas en el chunk.",
+                            "input_schema": RESPONSE_SCHEMA,
                             "strict": True,
-                        },
-                    },
+                        }
+                    ],
+                    tool_choice={"type": "tool", "name": _TOOL_NAME},
                 )
-                return json.loads(response.choices[0].message.content)
+                return self._extract_tool_input(response)
             except Exception as exc:
                 error = classify_and_wrap(exc, module="segmentation")
                 if isinstance(error, PermanentPipelineError):
@@ -87,5 +81,12 @@ class OpenAIAnalysisProvider(AIAnalysisProvider):
                     time.sleep(_BACKOFF_SECONDS[attempt - 1])
 
         raise SegmentationError(
-            f"agotados {_MAX_ATTEMPTS} intentos contra OpenAI: {last_error}"
+            f"agotados {_MAX_ATTEMPTS} intentos contra Claude: {last_error}"
         ) from last_error
+
+    @staticmethod
+    def _extract_tool_input(response: anthropic.types.Message) -> dict:
+        for block in response.content:
+            if block.type == "tool_use" and block.name == _TOOL_NAME:
+                return block.input
+        raise SegmentationError("Claude no devolvio la tool call esperada")

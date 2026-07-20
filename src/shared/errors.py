@@ -81,6 +81,19 @@ def _classify_openai(exc) -> type[PipelineError] | None:
     return None
 
 
+def _classify_anthropic(exc) -> type[PipelineError] | None:
+    try:
+        import anthropic
+    except ImportError:
+        return None
+
+    if isinstance(exc, (anthropic.RateLimitError, anthropic.APITimeoutError, anthropic.APIConnectionError, anthropic.InternalServerError)):
+        return TransientPipelineError
+    if isinstance(exc, (anthropic.BadRequestError, anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.NotFoundError)):
+        return PermanentPipelineError
+    return None
+
+
 def classify_and_wrap(
     exc: Exception,
     *,
@@ -107,6 +120,10 @@ def classify_and_wrap(
     openai_cls = _classify_openai(exc)
     if openai_cls is not None:
         return openai_cls(f"[{module}] {exc}", cause=exc)
+
+    anthropic_cls = _classify_anthropic(exc)
+    if anthropic_cls is not None:
+        return anthropic_cls(f"[{module}] {exc}", cause=exc)
 
     if isinstance(exc, (json.JSONDecodeError, ValidationError)):
         return PermanentPipelineError(f"[{module}] datos invalidos: {exc}", cause=exc)

@@ -16,6 +16,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7",
     "uuid6>=2024.7.10",
     "openai>=1.50",
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]

@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from src.application.orchestrator import MediaProcessingOrchestrator
 from src.infrastructure.config import settings
 from src.infrastructure.db.engine import get_engine
+from src.modules.ai.providers.anthropic_provider import AnthropicAnalysisProvider
+from src.modules.ai.providers.fallback_provider import AIProviderWithFallback
 from src.modules.ai.providers.openai_provider import OpenAIAnalysisProvider
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
 from src.modules.editorial.services import NoticiaService
@@ -63,9 +65,15 @@ def get_recording_resolver(session: Session = Depends(get_db_session)) -> Record
 
 def get_pipeline_run_service(session: Session = Depends(get_db_session)) -> PipelineRunService:
     orchestrator = MediaProcessingOrchestrator(
-        ai_provider=OpenAIAnalysisProvider(
-            api_key=settings.openai_api_key.get_secret_value() if settings.openai_api_key else "",
-            model=settings.openai_model,
+        ai_provider=AIProviderWithFallback(
+            primary=AnthropicAnalysisProvider(
+                api_key=settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else "",
+                model=settings.anthropic_model,
+            ),
+            secondary=OpenAIAnalysisProvider(
+                api_key=settings.openai_api_key.get_secret_value() if settings.openai_api_key else "",
+                model=settings.openai_model,
+            ),
         )
     )
     return PipelineRunService(
