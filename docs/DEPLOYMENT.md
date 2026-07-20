@@ -101,7 +101,7 @@ Ver `docs/INGESTION_DESIGN.md` para el diseño completo. Requiere las variables 
 
 ```bash
 # una vez, antes de la primera corrida:
-docker compose exec backend python scripts/seed_medios_programas.py
+docker compose exec backend python scripts/seed_medios.py
 
 # ciclo normal (correr periodicamente mientras haya backlog, ej. via cron):
 docker compose exec backend python scripts/discover_grabaciones.py

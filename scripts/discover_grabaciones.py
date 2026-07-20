@@ -1,6 +1,6 @@
 """Corre DiscoveryService una vez: escanea settings.capture_bucket y crea
 Grabacion(estado=PENDIENTE) para cada archivo nuevo. Idempotente -- correrlo
-de nuevo no duplica nada. Requiere haber corrido seed_medios_programas.py
+de nuevo no duplica nada. Requiere haber corrido seed_medios.py
 antes (si no, los archivos de estaciones sin Medio se listan y se ignoran).
 
 Uso: python scripts/discover_grabaciones.py
@@ -36,7 +36,7 @@ def main() -> None:
         print(f"ya existian: {result.ya_existian}")
         print(f"ignoradas (no reconocidas): {result.ignoradas_no_reconocidas}")
         if result.estaciones_sin_medio:
-            print(f"ATENCION -- estaciones sin Medio (corre seed_medios_programas.py): "
+            print(f"ATENCION -- estaciones sin Medio (corre seed_medios.py): "
                   f"{sorted(result.estaciones_sin_medio)}")
 
 

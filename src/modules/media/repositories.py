@@ -25,6 +25,6 @@ class ProgramaRepository(Repository[Programa]):
         """Discovery necesita *un* programa_id por Grabacion, pero todavia no
         hay horarios reales por programa (docs/INGESTION_DESIGN.md) -- cada
         Medio tiene un unico Programa "catch-all" sembrado por
-        scripts/seed_medios_programas.py, y esto devuelve ese."""
+        scripts/seed_medios.py, y esto devuelve ese."""
         stmt = select(Programa).where(Programa.medio_id == medio_id).limit(1)
         return self._session.scalars(stmt).first()

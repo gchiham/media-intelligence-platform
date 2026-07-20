@@ -26,7 +26,7 @@ _KEY_PATTERN = re.compile(
 
 class EstacionNoRegistrada(Exception):
     """El archivo esta en S3 pero su carpeta de estacion no tiene un Medio
-    sembrado todavia (ver scripts/seed_medios_programas.py)."""
+    sembrado todavia (ver scripts/seed_medios.py)."""
 
     def __init__(self, station: str):
         super().__init__(f"estacion '{station}' sin Medio registrado -- correr el seeder primero")

@@ -105,7 +105,7 @@ flujo editorial ya construido (GET /news/pending → start-review → draft → 
 - `grabaciones.estado`: índice nuevo (se filtra por estado constantemente).
 - `grabaciones.error_mensaje` (Text, nullable): columna nueva, mismo patrón que `pipeline_runs.error_mensaje`.
 - Sin cambios de schema en `transcripciones`/`pipeline_runs`/`noticias` — ya tenían todo lo necesario.
-- Seed de datos (no es migración): `medios`/`programas` para las estaciones reales (`scripts/seed_medios_programas.py`) — bloqueante para que Discovery pueda resolver `programa_id`.
+- Seed de datos (no es migración): `medios`/`programas` para las estaciones reales (`scripts/seed_medios.py`, ya existía desde el commit inicial -- fuente de verdad `config/stations.json` de mediaCAP; se le agregaron 4 estaciones que ya tienen archivos reales en S3 pero no estaban sembradas: `suave_fm_teg`, `super_100`, `tnh`, `tsi`) — bloqueante para que Discovery pueda resolver `programa_id`.
 
 ## Riesgos conocidos
 

@@ -29,6 +29,14 @@ STATIONS = [
     ("canal_5", "Canal 5", "tv"),
     ("canal_6", "Canal 6", "tv"),
     ("radio_valle", "Radio Valle", "radio"),
+    # Agregadas 2026-07-20 (docs/INGESTION_DESIGN.md): carpetas reales en
+    # s3://mediadev-recordings/ sin Medio sembrado todavia -- DiscoveryService
+    # las ignora (y las reporta) mientras no esten aca. Clasificacion
+    # radio/tv por nombre, no por config/stations.json -- revisar si esta mal.
+    ("suave_fm_teg", "Suave FM Tegucigalpa", "radio"),
+    ("super_100", "Super 100", "radio"),
+    ("tnh", "TNH", "tv"),
+    ("tsi", "TSI", "radio"),
 ]
 
 
