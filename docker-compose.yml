@@ -1,15 +1,92 @@
 services:
-  db:
+  postgres:
     image: postgres:17
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: media_intelligence
-    ports:
-      # 5433 en el host: el 5432 ya esta ocupado por un Postgres nativo de Windows en esta maquina.
-      - "5433:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-media_intelligence}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en .env}
+    command:
+      # logging_collector: logs de Postgres a archivo (ver docs/DEPLOYMENT.md,
+      # seccion Logging) ademas de stdout -- sin esto solo quedarian en
+      # `docker compose logs`, no en el host.
+      - "postgres"
+      - "-c"
+      - "logging_collector=on"
+      - "-c"
+      - "log_directory=/var/log/postgresql"
+      - "-c"
+      - "log_filename=postgresql.log"
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./logs/postgres:/var/log/postgresql
+    ports:
+      # Solo para acceso administrativo (psql, backups manuales) -- el
+      # backend habla con Postgres por la red interna de docker compose, no
+      # por este puerto. Default 5433 (no 5432) porque el compose de
+      # desarrollo local ya usaba ese puerto para no chocar con un Postgres
+      # nativo en la maquina de dev -- en el servidor de produccion es
+      # seguro usar 5432 si prefieres, cambialo en .env.
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-media_intelligence}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  backend:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-media_intelligence}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?falta OPENAI_API_KEY en .env}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LOCAL_MEDIA_DIR: /data/recordings
+    volumes:
+      # Ver docs/DEPLOYMENT.md, seccion "Nota: audio/words vs LocalFileRecordingResolver"
+      # -- LOCAL_MEDIA_DIR sigue siendo un directorio combinado por ahora.
+      - ./data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
-  db_data:
+  postgres_data:

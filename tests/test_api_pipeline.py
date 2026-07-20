@@ -113,6 +113,7 @@ def test_process_recording_success(client, session, grabacion_id, recording_file
         assert uuid.UUID(body["pipeline_run_id"])
     finally:
         _limpiar_pipeline_run(session, uuid.UUID(body["pipeline_run_id"]))
+        shutil.rmtree(settings.local_media_dir / "clips" / str(grabacion_id), ignore_errors=True)
 
 
 def test_process_recording_not_found_returns_404(client):

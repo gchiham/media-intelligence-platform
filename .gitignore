@@ -4,4 +4,15 @@ __pycache__/
 .env
 .pytest_cache/
 *.egg-info/
-data/
+
+data/*
+!data/*/
+data/*/*
+!data/*/.gitkeep
+
+logs/*
+!logs/*/
+logs/*/*
+!logs/*/.gitkeep
+
+postgres_backups/
