@@ -33,6 +33,10 @@ import boto3
 
 QUEUE_URL = os.environ["QUEUE_URL"]
 DLQ_URL = os.environ.get("DLQ_URL", QUEUE_URL + "-dlq")
+# Cola que consume TranscriptionResultConsumer en el backend (CPU, con
+# Postgres) -- chepita nunca escribe a la DB directamente, solo publica aca
+# despues de subir el resultado a S3. Ver docs/INGESTION_DESIGN.md.
+DONE_QUEUE_URL = os.environ.get("DONE_QUEUE_URL")
 WORKER_ID = os.environ.get("WORKER_ID", "w0")
 MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")
 BATCH_SIZE = int(os.environ.get("WHISPER_BATCH_SIZE", "24"))
@@ -147,6 +151,7 @@ while idle_rounds < 3:
     s3_output_prefix = job["s3_output_prefix"]
 
     t0 = time.time()
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0))
     log(f"START {station} wait_for_download={waited:.2f}s")
 
     local_txt = f"{WORK_DIR}/{station}.txt"
@@ -189,6 +194,25 @@ while idle_rounds < 3:
     log(f"DONE {station} elapsed={elapsed:.1f}s")
 
     sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
+
+    grabacion_id = job.get("grabacion_id")
+    if DONE_QUEUE_URL and grabacion_id:
+        done_event = {
+            "grabacion_id": grabacion_id,
+            "station": station,
+            "audio_s3_uri": job["s3_input"],
+            "transcription_txt_s3_uri": f"s3://{out_bucket}/{out_key}.txt",
+            "words_json_s3_uri": f"s3://{out_bucket}/{out_key}_words.json",
+            "duration_seconds": result.duration,
+            "language": result.language,
+            "status": "completed",
+            "worker_id": WORKER_ID,
+            "started_at": started_at,
+            "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        sqs.send_message(QueueUrl=DONE_QUEUE_URL, MessageBody=json.dumps(done_event, ensure_ascii=False))
+    elif not grabacion_id:
+        log(f"WARN {station} job sin grabacion_id -- no se publica evento done (job legado sin ingesta)")
 
 stop_event.set()
 log(f"cola vacia, saliendo. total procesados por este worker: {processed}, fallidos: {failed}, "

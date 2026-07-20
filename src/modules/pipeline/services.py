@@ -37,6 +37,15 @@ class PipelineRunService:
         self._orchestrator = orchestrator
 
     def run(self, grabacion_id: uuid.UUID, job: ProcessAudioJob) -> PipelineRun:
+        # Idempotencia (docs/INGESTION_DESIGN.md, punto 6): si esta Grabacion
+        # ya tiene un PipelineRun COMPLETADO, devolverlo tal cual en vez de
+        # correr el pipeline de nuevo -- evita Noticia/NoticiaVersion
+        # duplicadas si el endpoint se llama dos veces para la misma
+        # grabacion (reintento del cliente, doble click, etc.).
+        existing = self._pipeline_runs.get_completado_by_grabacion_id(grabacion_id)
+        if existing is not None:
+            return existing
+
         pipeline_run = PipelineRun(
             grabacion_id=grabacion_id,
             estado=EstadoPipelineRun.EN_PROGRESO,

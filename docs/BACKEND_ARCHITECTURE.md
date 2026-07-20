@@ -177,11 +177,12 @@ Ya resuelto (dejado aquí tachado, no borrado, para que quede el historial):
 - ~~Módulo Editorial: lógica real en `NoticiaService`~~ — hecho, ver `docs/EDITORIAL_DOMAIN.md`.
 - ~~Conectar `get_session()` a los repositorios vía `Depends()`~~ — hecho, ver `docs/API.md`.
 - ~~Endpoints reales en Pipeline y Editorial~~ — hecho, ver `docs/API.md`.
+- ~~Integración real con S3 (`S3RecordingResolver`)~~ — hecho, ver `docs/INGESTION_DESIGN.md`.
+- ~~Ingesta S3 → Postgres (Discovery/Queue/consumers de resultado y DLQ)~~ — hecho, ver `docs/INGESTION_DESIGN.md`.
+- ~~Decidir quién dispara un `PipelineRun`~~ — resuelto: el Backend lo dispara vía `POST /pipeline/process`, sobre una `Grabacion` que ya llegó a `estado=procesada` (transcrita). Nada lo dispara automáticamente todavía — sigue siendo una llamada explícita, no un trigger por evento; ver `docs/INGESTION_DESIGN.md` si se quiere automatizar eso después.
 
 Pendiente:
 
 - Autenticación/RBAC — `editor_id` hoy se recibe explícito en el body porque no hay forma de saber quién llama (ver nota en `docs/API.md`). Cuando exista auth, desaparece del body.
 - Lógica real en el resto de `Service` stubs (`MediaService`, `ClienteService`, `UsuarioService`) y sus endpoints.
-- Decidir quién dispara un `PipelineRun` en producción (¿el Backend lo inicia? ¿solo lo registra después de que otro sistema — S3 event, cron — lo hizo?) — deliberadamente sin resolver todavía.
-- Integración real con S3: hoy `RecordingResolver` (`src/modules/pipeline/resolvers.py`) solo tiene una implementación local (`LocalFileRecordingResolver`, busca archivos ya presentes en `settings.local_media_dir`). Migrar a S3 es agregar un `S3RecordingResolver` nuevo — ni el dominio ni los routers deberían cambiar.
 - Publicación al cliente (`ClienteNoticia`) cuando `approve()` lo requiera.

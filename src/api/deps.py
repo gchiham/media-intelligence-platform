@@ -9,8 +9,11 @@ resultado de cada dependencia dentro de un mismo request, asi que aunque
 `get_db_session` aparezca como sub-dependencia de varios `Depends()` en el
 mismo endpoint, se abre una sola sesion por request, no una por dependencia.
 """
+import tempfile
 from collections.abc import Generator
+from pathlib import Path
 
+import boto3
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
@@ -23,9 +26,13 @@ from src.modules.ai.providers.openai_provider import OpenAIAnalysisProvider
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
 from src.modules.editorial.services import NoticiaService
 from src.modules.pipeline.repositories import PipelineRunRepository
-from src.modules.pipeline.resolvers import LocalFileRecordingResolver, RecordingResolver
+from src.modules.pipeline.resolvers import (
+    LocalFileRecordingResolver,
+    RecordingResolver,
+    S3RecordingResolver,
+)
 from src.modules.pipeline.services import PipelineRunService
-from src.modules.recordings.repositories import GrabacionRepository
+from src.modules.recordings.repositories import GrabacionRepository, TranscripcionRepository
 
 
 def get_db_session() -> Generator[Session, None, None]:
@@ -58,6 +65,16 @@ def get_noticia_version_repository(session: Session = Depends(get_db_session)) -
 
 
 def get_recording_resolver(session: Session = Depends(get_db_session)) -> RecordingResolver:
+    """`settings.recording_resolver` decide la implementacion -- "local" en
+    dev (sin credenciales AWS), "s3" en produccion. Ver docs/INGESTION_DESIGN.md."""
+    if settings.recording_resolver == "s3":
+        return S3RecordingResolver(
+            grabaciones=GrabacionRepository(session),
+            transcripciones=TranscripcionRepository(session),
+            s3_client=boto3.client("s3", region_name=settings.aws_region),
+            capture_bucket=settings.capture_bucket,
+            work_dir=Path(tempfile.gettempdir()) / "media-intel-pipeline",
+        )
     return LocalFileRecordingResolver(
         grabaciones=GrabacionRepository(session), base_dir=settings.local_media_dir,
     )

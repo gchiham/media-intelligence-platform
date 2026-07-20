@@ -52,6 +52,19 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       LOCAL_MEDIA_DIR: /data/recordings
+      # Ingesta S3 -> Postgres (docs/INGESTION_DESIGN.md). Los scripts de
+      # scripts/discover_grabaciones.py, enqueue_transcriptions.py y
+      # consume_transcription_results.py corren dentro de este contenedor
+      # via `docker compose exec backend python scripts/...` -- boto3 toma
+      # las credenciales del instance profile de EC2 (media-intel-backend),
+      # no hace falta AWS_ACCESS_KEY_ID/SECRET aca.
+      RECORDING_RESOLVER: ${RECORDING_RESOLVER:-local}
+      CAPTURE_BUCKET: ${CAPTURE_BUCKET:-mediadev-recordings}
+      TRANSCRIBE_OUTPUT_BUCKET: ${TRANSCRIBE_OUTPUT_BUCKET:-media-intel-transcribe-050871635829}
+      TRANSCRIPTION_JOBS_QUEUE_URL: ${TRANSCRIPTION_JOBS_QUEUE_URL:-}
+      TRANSCRIPTION_DONE_QUEUE_URL: ${TRANSCRIPTION_DONE_QUEUE_URL:-}
+      TRANSCRIPTION_DLQ_URL: ${TRANSCRIPTION_DLQ_URL:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
     volumes:
       # Ver docs/DEPLOYMENT.md, seccion "Nota: audio/words vs LocalFileRecordingResolver"
       # -- LOCAL_MEDIA_DIR sigue siendo un directorio combinado por ahora.

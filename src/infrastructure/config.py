@@ -16,9 +16,20 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     # Directorio local donde el pipeline busca los archivos de una Grabacion
     # (words.json + audio) y donde escribe los clips generados. Ver
-    # RecordingResolver en src/modules/pipeline/resolvers.py -- cuando exista
-    # integracion con S3, esto deja de usarse sin que el dominio cambie.
+    # RecordingResolver en src/modules/pipeline/resolvers.py -- "local" en
+    # dev, "s3" en produccion (S3RecordingResolver, docs/INGESTION_DESIGN.md).
     local_media_dir: Path = Path("./data/recordings")
+    recording_resolver: str = "local"
+
+    # Ingesta S3 -> Postgres (DiscoveryService/QueueService/consumers). Ver
+    # docs/INGESTION_DESIGN.md. Buckets y colas ya existen en AWS (infra
+    # provisionada fuera de este repo, ver docs/INFRASTRUCTURE.md).
+    capture_bucket: str = "mediadev-recordings"
+    transcribe_output_bucket: str = "media-intel-transcribe-050871635829"
+    transcription_jobs_queue_url: str = ""
+    transcription_done_queue_url: str = ""
+    transcription_dlq_url: str = ""
+    aws_region: str = "us-east-1"
 
 
 settings = Settings()

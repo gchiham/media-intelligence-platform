@@ -118,11 +118,13 @@ En ambos casos, el mensaje que llega a la DLQ tiene este formato:
 
 ```json
 {
-  "original_job": { "station": "...", "s3_input": "s3://...", "s3_output_prefix": "s3://..." },
+  "original_job": { "grabacion_id": "uuid", "station": "...", "s3_input": "s3://...", "s3_output_prefix": "s3://..." },
   "error": { "job_id": "...", "module": "...", "audio_ref": "...", "error_type": "...",
              "error_message": "...", "stack_trace": "...", "attempt": 3, "occurred_at": "..." }
 }
 ```
+
+`grabacion_id` (ver [INGESTION_DESIGN.md](INGESTION_DESIGN.md)) es lo que le permite a `TranscriptionFailureConsumer` marcar la `Grabacion` correspondiente como `error` en Postgres sin tener que adivinar a qué fila corresponde el fallo.
 
 Para el camino 2 (redrive automático), la DLQ solo tiene el `Body` original de SQS — sin el envelope `error` — porque SQS lo mueve él mismo, sin pasar por nuestro código. Si se quiere el mismo nivel de detalle en ambos casos, la opción es bajar `maxReceiveCount` a 1 y dejar que **todo** pase por el camino de clasificación propia — evaluado y descartado por ahora: perdería la distinción transitorio/permanente y volvería a gastar 0 reintentos en errores genuinamente transitorios.
 

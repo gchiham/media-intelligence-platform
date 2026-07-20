@@ -95,6 +95,20 @@ docker compose exec backend alembic current   # ver la revision aplicada
 docker compose exec backend alembic history    # ver el historial completo
 ```
 
+## Ingesta S3 -> Postgres (chepita)
+
+Ver `docs/INGESTION_DESIGN.md` para el diseño completo. Requiere las variables `CAPTURE_BUCKET`/`TRANSCRIBE_OUTPUT_BUCKET`/`TRANSCRIPTION_*_QUEUE_URL` en `.env` (ver `.env.example`) y que la instancia EC2 tenga asociado el instance profile `media-intel-backend` (ya provisionado -- da acceso de solo lectura a los buckets de media y de send/receive/delete sobre las 3 colas de transcripción, nada más).
+
+```bash
+# una vez, antes de la primera corrida:
+docker compose exec backend python scripts/seed_medios_programas.py
+
+# ciclo normal (correr periodicamente mientras haya backlog, ej. via cron):
+docker compose exec backend python scripts/discover_grabaciones.py
+docker compose exec backend python scripts/enqueue_transcriptions.py
+docker compose exec backend python scripts/consume_transcription_results.py
+```
+
 ## Backups
 
 ```bash

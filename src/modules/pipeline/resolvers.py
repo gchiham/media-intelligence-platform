@@ -5,19 +5,23 @@ metodo, y ni PipelineRunService ni MediaProcessingOrchestrator lo conocen ni
 saben si los archivos vienen de disco local o de S3. Solo la capa API lo usa,
 antes de construir el ProcessAudioJob.
 
-`LocalFileRecordingResolver` es la implementacion de esta fase: busca los
+`LocalFileRecordingResolver` es la implementacion de desarrollo: busca los
 archivos ya presentes en un directorio local (`settings.local_media_dir`).
-Cuando exista integracion real con S3, la migracion es escribir un
-`S3RecordingResolver` que descargue a un directorio temporal y devuelva las
-mismas rutas locales -- el resto de la aplicacion no cambia.
+
+`S3RecordingResolver` es la implementacion de produccion (docs/INGESTION_DESIGN.md):
+descarga el audio de S3 a un directorio temporal, y escribe el words.json a
+partir de `Transcripcion.segmentos` -- que ya vive en Postgres (Postgres es
+la fuente de verdad del estado del sistema, nunca se vuelve a leer el
+words.json de S3 aca; solo el audio, que no tiene copia en Postgres).
 """
+import json
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
 from src.modules.pipeline.exceptions import GrabacionNoEncontrada, RecursosNoDisponibles
-from src.modules.recordings.repositories import GrabacionRepository
+from src.modules.recordings.repositories import GrabacionRepository, TranscripcionRepository
 
 
 @dataclass
@@ -56,6 +60,51 @@ class LocalFileRecordingResolver(RecordingResolver):
         if faltantes:
             raise RecursosNoDisponibles(recording_id, f"archivos no encontrados: {', '.join(faltantes)}")
 
+        return RecordingResources(
+            audio_path=audio_path, words_json_path=words_json_path, output_dir=output_dir,
+        )
+
+
+class S3RecordingResolver(RecordingResolver):
+    def __init__(
+        self,
+        grabaciones: GrabacionRepository,
+        transcripciones: TranscripcionRepository,
+        s3_client,
+        capture_bucket: str,
+        work_dir: Path,
+    ):
+        self._grabaciones = grabaciones
+        self._transcripciones = transcripciones
+        self._s3 = s3_client
+        self._capture_bucket = capture_bucket
+        self._work_dir = work_dir
+
+    def resolve(self, recording_id: uuid.UUID) -> RecordingResources:
+        grabacion = self._grabaciones.get_by_id(recording_id)
+        if grabacion is None:
+            raise GrabacionNoEncontrada(recording_id)
+
+        transcripcion = self._transcripciones.get_by_grabacion_id(recording_id)
+        if transcripcion is None:
+            raise RecursosNoDisponibles(
+                recording_id, "todavia no hay Transcripcion (chepita no ha terminado, o el "
+                "TranscriptionResultConsumer no proceso el resultado)"
+            )
+
+        stem = grabacion.s3_key.rsplit(".", 1)[0].replace("/", "_")
+        local_dir = self._work_dir / str(recording_id)
+        local_dir.mkdir(parents=True, exist_ok=True)
+
+        audio_path = local_dir / f"{stem}.mp3"
+        self._s3.download_file(self._capture_bucket, grabacion.s3_key, str(audio_path))
+
+        words_json_path = local_dir / f"{stem}_words.json"
+        words_json_path.write_text(
+            json.dumps(transcripcion.segmentos["words"], ensure_ascii=False), encoding="utf-8"
+        )
+
+        output_dir = local_dir / "clips"
         return RecordingResources(
             audio_path=audio_path, words_json_path=words_json_path, output_dir=output_dir,
         )

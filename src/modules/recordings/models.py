@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,7 +31,11 @@ class Grabacion(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Enum(EstadoGrabacion, name="estado_grabacion", values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         default=EstadoGrabacion.PENDIENTE,
+        index=True,
     )
+    # Motivo del ultimo fallo permanente (DLQ) -- nullable, solo se llena
+    # cuando estado=ERROR. Mismo patron que PipelineRun.error_mensaje.
+    error_mensaje: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Transcripcion(Base, UUIDPrimaryKeyMixin, TimestampMixin):
