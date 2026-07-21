@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from src.api.routers import auth, clients, editorial, media, pipeline
+from src.infrastructure.db import registry  # noqa: F401 -- registra todos los modelos (FKs cruzadas entre modulos)
 from src.modules.editorial.exceptions import (
     ColaVacia,
     NoticiaNoBloqueadaPorEditor,
