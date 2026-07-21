@@ -21,7 +21,6 @@ from src.application.orchestrator import MediaProcessingOrchestrator
 from src.infrastructure.config import settings
 from src.infrastructure.db.engine import get_engine
 from src.modules.ai.providers.anthropic_provider import AnthropicAnalysisProvider
-from src.modules.ai.providers.fallback_provider import AIProviderWithFallback
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
 from src.modules.editorial.services import NoticiaService
 from src.modules.pipeline.repositories import PipelineRunRepository
@@ -80,16 +79,14 @@ def get_recording_resolver(session: Session = Depends(get_db_session)) -> Record
 
 
 def get_pipeline_run_service(session: Session = Depends(get_db_session)) -> PipelineRunService:
+    # Sin fallback a otro modelo a proposito -- se prefiere que el
+    # PipelineRun quede en ERROR (AnthropicAnalysisProvider ya reintenta 3
+    # veces con backoff antes de rendirse) a degradar la calidad de
+    # extraccion cayendo a un modelo mas chico.
     orchestrator = MediaProcessingOrchestrator(
-        ai_provider=AIProviderWithFallback(
-            primary=AnthropicAnalysisProvider(
-                api_key=settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else "",
-                model=settings.anthropic_model,
-            ),
-            secondary=AnthropicAnalysisProvider(
-                api_key=settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else "",
-                model=settings.anthropic_fallback_model,
-            ),
+        ai_provider=AnthropicAnalysisProvider(
+            api_key=settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else "",
+            model=settings.anthropic_model,
         )
     )
     return PipelineRunService(

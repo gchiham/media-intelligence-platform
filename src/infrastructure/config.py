@@ -12,11 +12,6 @@ class Settings(BaseSettings):
     # respaldo si Claude agota sus reintentos -- ver AIProviderWithFallback.
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-sonnet-5"
-    # Fallback de segmentacion (AIProviderWithFallback): mismo proveedor
-    # (Anthropic), modelo mas chico -- ver deps.py. OpenAI dejo de ser el
-    # secundario porque esa cuenta se quedo sin fondos (insufficient_quota),
-    # asi que dependia de un proveedor que en la practica nunca respondia.
-    anthropic_fallback_model: str = "claude-haiku-4-5-20251001"
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o-mini"
     # Directorio local donde el pipeline busca los archivos de una Grabacion
