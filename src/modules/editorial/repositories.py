@@ -1,7 +1,7 @@
 from sqlalchemy import select
 
 from src.infrastructure.db.repository import Repository
-from src.modules.editorial.models import EstadoNoticia, Noticia, NoticiaVersion
+from src.modules.editorial.models import EstadoNoticia, MonitoringProfile, Noticia, NoticiaVersion
 
 
 class NoticiaRepository(Repository[Noticia]):
@@ -39,3 +39,11 @@ class NoticiaVersionRepository(Repository[NoticiaVersion]):
     """NewsVersion."""
 
     model = NoticiaVersion
+
+
+class MonitoringProfileRepository(Repository[MonitoringProfile]):
+    model = MonitoringProfile
+
+    def get_by_tenant_id(self, tenant_id) -> MonitoringProfile | None:
+        stmt = select(MonitoringProfile).where(MonitoringProfile.tenant_id == tenant_id)
+        return self._session.scalars(stmt).first()
