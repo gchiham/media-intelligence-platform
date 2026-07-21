@@ -32,12 +32,18 @@ def process_recording(
     resolver: RecordingResolver = Depends(get_recording_resolver),
 ) -> ProcessRecordingResponse:
     resources = resolver.resolve(body.recording_id)
-    job = ProcessAudioJob(
-        words_json_path=resources.words_json_path,
-        audio_path=resources.audio_path,
-        output_dir=resources.output_dir,
-    )
-    pipeline_run = pipeline_service.run(body.recording_id, job)
+    try:
+        job = ProcessAudioJob(
+            words_json_path=resources.words_json_path,
+            audio_path=resources.audio_path,
+            output_dir=resources.output_dir,
+        )
+        pipeline_run = pipeline_service.run(body.recording_id, job)
+    finally:
+        # Siempre, incluso si el pipeline fallo -- sin esto el audio
+        # descargado (S3RecordingResolver) se queda para siempre y llena el
+        # disco del backend.
+        resolver.cleanup(resources)
 
     return ProcessRecordingResponse(
         pipeline_run_id=pipeline_run.id,

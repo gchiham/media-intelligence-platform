@@ -15,6 +15,7 @@ la fuente de verdad del estado del sistema, nunca se vuelve a leer el
 words.json de S3 aca; solo el audio, que no tiene copia en Postgres).
 """
 import json
+import shutil
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -35,6 +36,11 @@ class RecordingResolver(ABC):
     @abstractmethod
     def resolve(self, recording_id: uuid.UUID) -> RecordingResources:
         raise NotImplementedError
+
+    def cleanup(self, resources: RecordingResources) -> None:
+        """Borra copias temporales creadas por resolve() (ej. audio bajado de
+        S3). No-op por default -- LocalFileRecordingResolver no posee esos
+        archivos (son los originales de dev), asi que no hay nada que borrar."""
 
 
 class LocalFileRecordingResolver(RecordingResolver):
@@ -138,3 +144,12 @@ class S3RecordingResolver(RecordingResolver):
         return RecordingResources(
             audio_path=audio_path, words_json_path=words_json_path, output_dir=output_dir,
         )
+
+    def cleanup(self, resources: RecordingResources) -> None:
+        # audio_path.parent es local_dir (ver resolve()) -- el audio bajado
+        # de S3 y el words.json escrito ahi no tienen ningun uso despues de
+        # correr el pipeline (Postgres ya tiene la Transcripcion; el clip, si
+        # se subio, ya se borro en PipelineRunService). Sin esto el disco del
+        # backend se llena solo -- 208 grabaciones x ~35MB de audio agotaron
+        # los 6.8GB de /tmp en Clipper a mitad de un batch.
+        shutil.rmtree(resources.audio_path.parent, ignore_errors=True)
