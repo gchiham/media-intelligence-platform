@@ -1,7 +1,29 @@
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from src.infrastructure.db.repository import Repository
 from src.modules.editorial.models import EstadoNoticia, MonitoringProfile, Noticia, NoticiaVersion
+
+_DASHBOARD_QUERY = text(
+    """
+    SELECT
+        n.id,
+        n.estado,
+        n.created_at,
+        v.titulo,
+        v.resumen,
+        v.prioridad,
+        v.ai_score,
+        v.metadatos_ia,
+        m.nombre AS medio_nombre,
+        p.nombre AS programa_nombre
+    FROM noticias n
+    LEFT JOIN noticia_versiones v ON v.id = n.version_actual_id
+    LEFT JOIN grabaciones g ON g.id = n.grabacion_id
+    LEFT JOIN programas p ON p.id = g.programa_id
+    LEFT JOIN medios m ON m.id = p.medio_id
+    ORDER BY n.created_at DESC
+    """
+)
 
 
 class NoticiaRepository(Repository[Noticia]):
@@ -33,6 +55,14 @@ class NoticiaRepository(Repository[Noticia]):
             .order_by(Noticia.created_at.asc())
         )
         return list(self._session.scalars(stmt))
+
+    def listar_todas_con_detalle(self) -> list[dict]:
+        """Lectura de reporte para GET /news/dashboard -- todas las noticias
+        (cualquier estado), mas reciente primero, con medio/programa via un
+        solo query (evita N+1). No pasa por el modelo Noticia a proposito:
+        es una proyeccion de solo lectura para UI, no una operacion de dominio."""
+        rows = self._session.execute(_DASHBOARD_QUERY).mappings()
+        return [dict(row) for row in rows]
 
 
 class NoticiaVersionRepository(Repository[NoticiaVersion]):

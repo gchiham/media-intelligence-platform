@@ -40,5 +40,9 @@ class Settings(BaseSettings):
     # configure explicitamente (no todos los entornos la necesitan).
     database_url_coverage: str | None = None
 
+    # Token de acceso para GET /news/dashboard (lectura publica sin auth de
+    # usuario -- ver docs/API.md). None = endpoint deshabilitado (404).
+    dashboard_token: str | None = None
+
 
 settings = Settings()
