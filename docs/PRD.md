@@ -593,8 +593,8 @@ SSO/MFA, notificaciones, redes sociales, prensa digital, podcasts, NOC, analíti
 
 Estas decisiones quedaron explícitamente pendientes durante la entrevista — no bloquean el inicio del desarrollo porque la arquitectura las aísla detrás de interfaces (`TranscriptionProvider`, `AIAnalysisProvider`), pero deben resolverse antes de cerrar esos módulos:
 
-1. **Infraestructura de transcripción:** ¿EC2 Spot GPU propio, un servidor fuera de AWS, o una API externa tipo Whisper de OpenAI?
-2. **Proveedor de LLM para el análisis semántico:** ¿OpenAI, Claude/Anthropic, o mantenerlo agnóstico permanentemente (multi-proveedor)?
+1. ~~**Infraestructura de transcripción:**~~ resuelto — EC2 GPU propio ("chepita", `g6.xlarge`/L4, Faster-Whisper), ver `docs/INFRASTRUCTURE.md`.
+2. ~~**Proveedor de LLM para el análisis semántico:**~~ resuelto — Claude Sonnet 5 (Anthropic), sin fallback a otro proveedor ni otro modelo (decisión explícita, no solo "todavía no se decidió"; ver `docs/ORCHESTRATOR_DESIGN.md`, sección "Sin fallback a otro modelo"). `AIAnalysisProvider` sigue siendo la interfaz abstracta — `OpenAIAnalysisProvider` existe y sigue probado, pero nada lo instancia en producción hoy.
 3. **Formato del informe ejecutivo semanal:** ¿cuerpo del correo en HTML, adjunto en PDF, o adjunto en Word?
 4. **Presupuesto y timeline formal del proyecto** — no se cubrió en la entrevista de producto; recomendable definirlo antes de comprometer fechas de entrega.
 5. **¿Se requerirá SSO/MFA para algún cliente institucional específico** (por sensibilidad política) antes de lo previsto en la Fase 6? — a vigilar según los primeros 2-3 clientes piloto.

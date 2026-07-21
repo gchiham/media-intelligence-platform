@@ -45,14 +45,16 @@ cp .env.example .env
 nano .env   # o el editor que prefieras
 ```
 
-Variables obligatorias a completar (`docker-compose.yml` falla explícitamente al arrancar si faltan — `POSTGRES_PASSWORD` y `OPENAI_API_KEY` usan la sintaxis `${VAR:?mensaje}`):
+Variables obligatorias a completar (`docker-compose.yml` falla explícitamente al arrancar si faltan — `POSTGRES_PASSWORD` y `ANTHROPIC_API_KEY` usan la sintaxis `${VAR:?mensaje}`):
 
 | Variable | Qué es |
 |---|---|
 | `POSTGRES_PASSWORD` | Password real de Postgres. Generar uno fuerte: `openssl rand -base64 24`. **Nunca "postgres" en producción.** |
-| `OPENAI_API_KEY` | Key real de OpenAI (la usa `AIAnalysisProvider` al ejecutar `POST /pipeline/process`). |
+| `ANTHROPIC_API_KEY` | Key real de Anthropic (Claude Sonnet 5 es el único proveedor de segmentación hoy — sin fallback a OpenAI, ver `docs/ORCHESTRATOR_DESIGN.md`). Si se queda sin crédito, `POST /pipeline/process` falla con 500 (`insufficient_quota`/`credit balance too low`) hasta recargar en el dashboard de Anthropic. |
 
-Variables con default razonable (revisar, no obligatorio cambiar): `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_HOST_PORT`, `OPENAI_MODEL`, `LOCAL_MEDIA_DIR`, `HTTP_PORT`. Ver `.env.example` para la explicación de cada una y la distinción desarrollo/producción.
+`OPENAI_API_KEY`/`OPENAI_MODEL` ya no son necesarias — quedaron en `.env.example` por si se reintroduce un fallback más adelante, pero `get_pipeline_run_service()` no las usa.
+
+Variables con default razonable (revisar, no obligatorio cambiar): `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_HOST_PORT`, `LOCAL_MEDIA_DIR`, `HTTP_PORT`, `CLIPS_BUCKET`. Ver `.env.example` para la explicación de cada una y la distinción desarrollo/producción.
 
 ## Despliegue inicial
 
@@ -97,17 +99,34 @@ docker compose exec backend alembic history    # ver el historial completo
 
 ## Ingesta S3 -> Postgres (chepita)
 
-Ver `docs/INGESTION_DESIGN.md` para el diseño completo. Requiere las variables `CAPTURE_BUCKET`/`TRANSCRIBE_OUTPUT_BUCKET`/`TRANSCRIPTION_*_QUEUE_URL` en `.env` (ver `.env.example`) y que la instancia EC2 tenga asociado el instance profile `media-intel-backend` (ya provisionado -- da acceso de solo lectura a los buckets de media y de send/receive/delete sobre las 3 colas de transcripción, nada más).
+Ver `docs/INGESTION_DESIGN.md` para el diseño completo. Requiere las variables `CAPTURE_BUCKET`/`TRANSCRIBE_OUTPUT_BUCKET`/`CLIPS_BUCKET`/`TRANSCRIPTION_*_QUEUE_URL`/`DATABASE_URL_COVERAGE` en `.env` (ver `.env.example`) y que la instancia EC2 tenga asociado el instance profile `media-intel-backend` (da acceso de solo lectura a los buckets de captura/transcripción, lectura+escritura al bucket de clips, y send/receive/delete sobre las 3 colas de transcripción).
+
+**Importante:** agregar una variable nueva a `.env` no alcanza — `docker-compose.yml` solo reenvía al contenedor `backend` una lista explícita de variables en su bloque `environment:`. Si se agrega algo a `.env` sin también agregarlo ahí, el contenedor nunca lo ve (pasó con `DATABASE_URL_COVERAGE` la primera vez).
 
 ```bash
 # una vez, antes de la primera corrida:
 docker compose exec backend python scripts/seed_medios.py
 
 # ciclo normal (correr periodicamente mientras haya backlog, ej. via cron):
-docker compose exec backend python scripts/discover_grabaciones.py
-docker compose exec backend python scripts/enqueue_transcriptions.py
+docker compose exec backend python scripts/discover_grabaciones.py          # escanea S3 por nombre de archivo (.mp3 solamente, ver riesgo abajo)
+docker compose exec backend python scripts/discover_grabaciones_coverage.py # lee recording_coverage (DB externa), ve tambien .ts
+docker compose exec backend python scripts/enqueue_transcriptions.py --limit 500   # opcional: --medio CODIGO / --fecha YYYY-MM-DD / --fecha-desde / --fecha-hasta
 docker compose exec backend python scripts/consume_transcription_results.py
 ```
+
+### Estado real de producción (2026-07-21)
+
+Esto **ya está desplegado y corriendo**, no es solo la receta — `media-intel-mvp-backend` (EC2, Elastic IP `32.196.209.233` asociada específicamente para que el otro equipo pueda poner esa IP en su allowlist de `recording_coverage`) tiene los 3 servicios (`postgres`, `backend`, `nginx`) arriba, y un crontab real en el host (no en el contenedor, sobrevive a un `docker compose up -d`):
+
+```
+* * * * *   cd .../media-intelligence-platform && docker compose exec -T backend python scripts/consume_transcription_results.py >> logs/pipeline/consume.log 2>&1
+*/5 * * * * cd .../media-intelligence-platform && docker compose exec -T backend python scripts/discover_grabaciones_coverage.py >> logs/pipeline/discover.log 2>&1
+*/5 * * * * cd .../media-intelligence-platform && docker compose exec -T backend python scripts/enqueue_transcriptions.py --limit 500 >> logs/pipeline/enqueue.log 2>&1
+```
+
+`consume` cada minuto (cada corrida solo drena hasta 10 mensajes por cola, límite de un `receive_message` de SQS — con un batch grande en curso hace falta más frecuencia, no una corrida manual única). `discover`/`enqueue` cada 5 min, sin filtro — encola *todo* el backlog pendiente con el tiempo, no solo lo más reciente; si se necesita priorizar un rango de fechas, hay que purgar la cola SQS y reencolar a mano en el orden deseado (ver `docs/INGESTION_DESIGN.md`).
+
+`POST /api/v1/pipeline/process` (segmentación LLM + clipping, ver `docs/ORCHESTRATOR_DESIGN.md`) **no** está en el cron — se invoca a mano (o desde una instancia temporal tipo "Clipper", ver `docs/INFRASTRUCTURE.md`) porque corre Claude + ffmpeg, mucho más pesado que discover/enqueue/consume; ponerlo en un cron de alta frecuencia sobre el `t3.small` de producción saturaría la CPU.
 
 ## Backups
 

@@ -51,7 +51,7 @@ class RecordingResolver(ABC):
 
 ### `POST /api/v1/pipeline/process`
 
-Ejecuta `PipelineRunService.run()` sobre una grabación ya transcrita.
+Ejecuta `PipelineRunService.run()` sobre una grabación ya transcrita. Cada noticia generada ya viene con `resumen`/`transcripcion_texto`/`metadatos_ia` (keywords, categoría, entidades) llenos por el LLM, y el clip subido a S3 (`Noticia.clip_s3_uri`) — ver `docs/ORCHESTRATOR_DESIGN.md`. Idempotente: si la grabación ya tiene un `PipelineRun` `completado`, lo devuelve tal cual sin volver a llamar a Claude ni a generar clips de nuevo.
 
 **Request**
 ```json
@@ -73,6 +73,7 @@ Ejecuta `PipelineRunService.run()` sobre una grabación ya transcrita.
 | `404` | `recording_id` no existe (`GrabacionNoEncontrada`) |
 | `409` | La grabación existe pero `words.json`/audio no están disponibles todavía (`RecursosNoDisponibles`) |
 | `422` | `recording_id` no es un UUID válido |
+| `500` | Casi siempre significa que Claude falló los 3 reintentos (ver `SegmentationError`) — la causa más común en la práctica es la cuenta de Anthropic sin crédito (`insufficient_quota`/`credit balance too low`), no un bug. No hay fallback a otro modelo (decisión explícita, ver `docs/ORCHESTRATOR_DESIGN.md`) — el `PipelineRun` queda en `error` y hay que reintentar la misma llamada una vez recargado el crédito. |
 
 ### `GET /api/v1/news/pending`
 
@@ -136,6 +137,16 @@ Ejecuta `NoticiaService.approve(news_id, editor_id)`. Body: `{ "editor_id": "...
 ### `POST /api/v1/news/{news_id}/reject`
 
 Ejecuta `NoticiaService.reject(news_id, editor_id, motivo)`. Body: `{ "editor_id": "...", "reason": "..." }`.
+
+### `GET /api/v1/news/dashboard` (temporal, agregado en paralelo a esta sesión)
+
+Página HTML de solo lectura con **todas** las noticias (cualquier estado, no solo `pendiente`), pestañas por medio, tarjetas con resumen/keywords/prioridad, y reproductor de audio inline cuando `clip_s3_uri` no es `NULL`. Pensado como vista rápida de progreso, no como el flujo editorial real (eso sigue siendo `pending`/`start-review`/`draft`/`approve`/`reject`).
+
+**No es autenticación de usuario** — protegido por un token compartido en la query string (`?token=...`), comparado contra `settings.dashboard_token` (`DASHBOARD_TOKEN` en `.env`). Si `DASHBOARD_TOKEN` no está configurado, o el token no coincide, responde `404` (no `401`/`403` — evita confirmar que el endpoint existe a quien no tiene el token).
+
+### `GET /api/v1/news/{news_id}/clip` (soporte de `/dashboard`, no se usa suelto)
+
+Redirige (`307`) a una URL presignada de S3 (`ExpiresIn=3600`) para el clip de audio de esa noticia (`Noticia.clip_s3_uri`) — el bucket de clips es privado, así que el `<audio src>` del dashboard no puede apuntar directo a él. Misma protección por `token` que `/dashboard`. `include_in_schema=False` — no aparece en `/docs`.
 
 ### Nota importante: `editor_id` en `draft`/`approve`/`reject`
 

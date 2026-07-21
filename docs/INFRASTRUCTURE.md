@@ -8,6 +8,15 @@ Cuenta AWS: `050871635829` (usuario `media-intelligence-dev`). Región: `us-east
 
 **Las 3 instancias originales fueron TERMINADAS el 2026-07-19** (no solo detenidas): `media-intel-chepita-g6-test` (`i-04ca44c8228a1611a`, g6.xlarge/L4), `media-intel-chepita-bench` (`i-0f54fdb1ea6fa6e0a`, g4dn.xlarge/T4), `media-intel-chepita-builder` (`i-0b07564ecf6a99da4`, c5.xlarge). No existen más — sus Instance IDs ya no son válidos, no intentar `start-instances` con ellos.
 
+**Patrón que se volvió a repetir el 2026-07-20/21:** lanzar 1-4 instancias `g6.xlarge` de chepita ad-hoc para drenar un backlog de transcripción, y **terminarlas** (no solo pararlas) cuando ya no hacen falta — no quedan IDs fijos de "la instancia de chepita", cada vez que se necesita, se relanza desde el AMI y se le redeploya `worker_prefetch.py` a mano (ver nota en `docs/INGESTION_DESIGN.md` sobre por qué el AMI no basta solo). Antes de terminar instancias con trabajo pendiente en la cola, confirmar con el usuario — la transcripción que falta se queda en `PROCESANDO`/en SQS indefinidamente hasta relanzar.
+
+**Instancia temporal para *pipelines* de IA (Sonnet + ffmpeg), no de transcripción — patrón "Clipper":** el backend de producción (`media-intel-mvp-backend`, `t3.small`) no tiene CPU para correr varios `POST /pipeline/process` en paralelo (cada uno dispara ~13 llamadas a Claude + varios `ffmpeg` de clipping) — un batch de 208 grabaciones con 6 en paralelo dejó el `load average` en 13.85 sobre 2 vCPUs. La solución fue lanzar una instancia separada, más grande (`c5.xlarge`, 4 vCPU), nombrada `Clipper`, temporal:
+  - Misma AMI base que el backend (Ubuntu 24.04 plano, `ami-052355af2a014bd2c`), **no** la AMI de chepita (no necesita GPU).
+  - Mismo IAM instance profile que el backend (`media-intel-backend`) — ya tiene los permisos S3 correctos, no hace falta un rol nuevo.
+  - Security group propio (`media-intel-clipper-sg`), con una regla adicional en el SG del backend permitiendo el puerto 5433 (Postgres) **desde ese SG específico** — para que Clipper hable con la misma Postgres de producción sin exponer el puerto a todo internet.
+  - No corre `docker compose` completo (no necesita su propio Postgres/nginx) — se hace `docker build` de la imagen del backend y `docker run` directo, pasando `DATABASE_URL` apuntando a la IP **privada** del backend (`172.31.5.81:5433`, no la pública — evita el viaje de ida y vuelta por el IGW).
+  - **Terminar cuando termine el trabajo** — es explícitamente temporal, no un servicio permanente. Si se necesita de nuevo, se relanza igual (unos 5 minutos: instalar Docker, clonar, buildear, correr).
+
 **Antes de terminar la g6-test** se horneó un AMI desde esa instancia (ya con `worker.py` desplegado, smoke test corrido y pasando justo antes de la captura — 2761 palabras, 0 errores):
 
 | AMI | AMI ID | Base | Descripción |
@@ -83,8 +92,9 @@ aws ssm get-command-invocation --command-id <id> --instance-id <nuevo-instance-i
 
 ## S3
 
-- Bucket de entrada (audio crudo): `mediadev-recordings`
-- Bucket de salida (transcripciones `.txt`): `media-intel-transcribe-050871635829`
+- Bucket de entrada (audio crudo): `mediadev-recordings` — **el capturador sube `.ts`, no `.mp3`** (cambio de formato no reflejado en el regex de `DiscoveryService`, ver `docs/INGESTION_DESIGN.md`). `worker_prefetch.py` no le importa la extensión real (ffmpeg/faster-whisper detectan el formato por contenido, no por nombre de archivo) — se puede seguir descargando y guardando localmente con extensión `.mp3` sin problema.
+- Bucket de salida (transcripciones `.txt`/`_words.json`): `media-intel-transcribe-050871635829`
+- Bucket de clips de noticia (nuevo, 2026-07-21): `media-intel-clips-050871635829` — privado, SSE-encriptado, un objeto por noticia detectada (`<grabacion_id>/news_XXX.mp3`). Ver `docs/ORCHESTRATOR_DESIGN.md` / `docs/BACKEND_ARCHITECTURE.md` (`ClipStorage`).
 
 ## Historial de benchmarking / optimización
 

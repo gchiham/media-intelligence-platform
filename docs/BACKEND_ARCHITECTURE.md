@@ -137,17 +137,29 @@ def run(self, grabacion_id: uuid.UUID, job: ProcessAudioJob) -> PipelineRun: ...
 Flujo:
 1. Crea `PipelineRun(estado=EN_PROGRESO, iniciado_at=now())` y lo **commitea de inmediato** — marca durable de que el run empezó, incluso si el proceso se cae después (NFR-012: trazabilidad de tareas asíncronas).
 2. Llama `MediaProcessingOrchestrator.process_audio(job)` **sin modificarlo** — el orquestador sigue siendo el mismo, agnóstico de base de datos, validado en fases anteriores.
-3. Por cada `ProcessedNews` devuelto: crea `Noticia` (con `pipeline_run_id` y `grabacion_id`) + `NoticiaVersion` inicial (`es_generada_por_ia=True`, `numero_version=1`), y enlaza `Noticia.version_actual_id`.
-4. Si todo sale bien: actualiza el `PipelineRun` a `COMPLETADO` con `noticias_generadas`, `finalizado_at`, y `metadatos` (padding usado, rutas de los clips generados, título+confianza de cada segmento detectado) — y **un solo commit** para todo el paso 3+4 (atómico: o se persisten todas las noticias de ese run junto con el estado final, o ninguna).
+3. Por cada `ProcessedNews` devuelto: sube el clip a S3 (`ClipStorage.upload()`, ver más abajo) y crea `Noticia` (con `pipeline_run_id`, `grabacion_id`, `clip_s3_uri`) + `NoticiaVersion` inicial (`resumen`, `transcripcion_texto`, `confianza`, `metadatos_ia` ya llenos desde el `NewsSegment` del LLM — ver `docs/ORCHESTRATOR_DESIGN.md` — `es_generada_por_ia=True`, `numero_version=1`), y enlaza `Noticia.version_actual_id`.
+4. Si todo sale bien: actualiza el `PipelineRun` a `COMPLETADO` con `noticias_generadas`, `finalizado_at`, y `metadatos` (padding usado, título+confianza de cada segmento detectado) — y **un solo commit** para todo el paso 3+4 (atómico: o se persisten todas las noticias de ese run junto con el estado final, o ninguna).
 5. Si algo falla: `rollback()` de lo pendiente (noticias a medias no quedan), y el `PipelineRun` (ya persistente desde el paso 1) se actualiza a `ERROR` con `error_mensaje`, en su propio commit.
 
-`resumen` y `transcripcion_texto` de `NoticiaVersion` quedan vacíos a propósito — llenarlos es responsabilidad del módulo Editorial, explícitamente fuera de alcance de esta fase (que solo valida que la persistencia del pipeline funcione de punta a punta, no el contenido editorial).
+**Actualización:** `resumen` y `transcripcion_texto` de `NoticiaVersion` **ya no quedan vacíos** — esta nota decía lo contrario en la version original de este documento (era el plan explícito de esa fase). Se llenaron directo desde la salida ampliada del LLM (`NewsSegment.summary`, y `item.text` que el orquestador arma uniendo las palabras del rango detectado) una vez que se amplió el schema de segmentación. `tema_id`/`subtema_id` y la resolución de personas/organizaciones/lugares contra el catálogo `Entidad` siguen sin implementar — ese dato crudo vive en `NoticiaVersion.metadatos_ia` (JSONB), sin resolver todavía.
+
+## `ClipStorage` — subida de clips a S3 (nuevo)
+
+Puerto análogo a `RecordingResolver` (mismo archivo, `src/modules/pipeline/resolvers.py`): `S3ClipStorage.upload(local_path, key) -> str` sube el clip que generó `clip_audio()` (ffmpeg) a un bucket **dedicado** (`media-intel-clips-050871635829`, privado, SSE-encriptado, IAM acotado solo a ese bucket) y devuelve la URI, guardada en `Noticia.clip_s3_uri`. `NullClipStorage` cubre dev local sin credenciales AWS (mismo rol que `LocalFileRecordingResolver` para `RecordingResolver`).
+
+Antes de esto, `clip_audio()` escribía el clip en un directorio temporal del backend y **nada lo subía a ningún lado durable** — se perdía si se limpiaba el disco o se recreaba el contenedor. `PipelineRunService._upload_clip()` invoca `ClipStorage` después de crear cada `Noticia`, y borra el archivo local si la subida tuvo éxito (si falla, no se pierde el archivo y `clip_s3_uri` queda `NULL` para reintentar después — un fallo de subida no tumba el `PipelineRun` completo).
+
+`RecordingResolver.cleanup()` (nuevo) hace el trabajo complementario: borra el audio descargado de S3 (y el `words.json` escrito localmente) después de cada corrida, éxito o fallo — sin esto el disco se llena solo (visto en producción corriendo un batch de 208 grabaciones).
 
 **Validado end-to-end contra PostgreSQL real** (no mock, no SQLite): `tests/test_pipeline_run_service_e2e.py`, con OpenAI real + ffmpeg real + el fixture ya usado en sesiones anteriores (149 palabras, 2 noticias reales). Resultado: `PipelineRun` queda `COMPLETADO` con `noticias_generadas=2`, se crean 2 filas `Noticia` con `pipeline_run_id` correctamente enlazado, cada una con su `NoticiaVersion` (`numero_version=1`, `es_generada_por_ia=True`) y `version_actual_id` apuntando de vuelta correctamente. El test limpia sus propias filas al terminar (no deja basura en la base real).
 
 **Nota de proceso:** al generar la migración con `alembic revision --autogenerate`, además del cambio esperado (`pipeline_runs` + `noticias.pipeline_run_id`) aparecieron ~15 índices faltantes en columnas FK de otras tablas (`tenant_id`, `grabacion_id`, etc.) que ya estaban declaradas `index=True` en los modelos pero nunca se habían migrado — drift preexistente de antes de esta sesión. Se incluyeron en la misma migración porque son puramente aditivas (no borran ni modifican nada existente) y alinean la base real con modelos que ya estaban en el código.
 
 Migración aplicada contra PostgreSQL real (`alembic upgrade head`, docker-compose local en `localhost:5433`) — ver `alembic/versions/f142223dde8b_*.py`.
+
+## Gotcha real: `main.py` necesita importar `registry` explícitamente
+
+Todo script (`scripts/*.py`) hace `from src.infrastructure.db import registry  # noqa: F401` antes de tocar la DB — necesario para que SQLAlchemy conozca modelos que ese código nunca importa directamente pero que participan en FKs cruzadas entre módulos (ej. `Noticia.asignado_a -> Usuario`, que vive en otro módulo). `src/api/main.py` no lo hacía, y nadie lo notó porque los tests siempre pasan por un `conftest`/fixture que importa `registry` por su cuenta. Resultado: la primera vez que `POST /pipeline/process` corrió de verdad en producción (nadie lo había invocado antes esa sesión), crasheó con `NoReferencedTableError` al intentar el primer `INSERT` de `Noticia`. Ya arreglado (`main.py` importa `registry` igual que los scripts) — vale la pena recordar este patrón si se agrega un router/entrypoint nuevo.
 
 ## API (FastAPI) — implementada
 
