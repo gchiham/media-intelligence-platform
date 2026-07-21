@@ -80,6 +80,10 @@ class NoticiaVersion(Base, UUIDPrimaryKeyMixin):
         nullable=True,
     )
     confianza: Mapped[dict] = mapped_column(JSONB, default=dict)  # confianza por campo, solo referencia
+    # keywords/news_type/people/organizations/locations crudos del LLM -- sin
+    # resolver contra el catalogo de Entidad todavia (ver NoticiaVersionEntidad,
+    # esa deduplicacion/matching es un paso posterior, fuera de alcance aqui).
+    metadatos_ia: Mapped[dict] = mapped_column(JSONB, default=dict)
     es_generada_por_ia: Mapped[bool] = mapped_column(Boolean, default=True)
     # NULL = version generada por IA sin intervencion humana todavia.
     editado_por: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True)

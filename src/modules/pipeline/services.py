@@ -68,16 +68,24 @@ class PipelineRunService:
                 self._noticias.add(noticia)
                 self._session.flush()  # asigna noticia.id sin cerrar la transaccion
 
-                # resumen/transcripcion_texto quedan vacios a proposito -- eso
-                # es responsabilidad del modulo Editorial, fuera de alcance de
-                # esta fase (solo se valida que la persistencia del pipeline
-                # funcione de punta a punta).
+                # tema_id/subtema_id y la resolucion de personas/organizaciones/
+                # lugares contra el catalogo de Entidad quedan fuera de esta
+                # fase a proposito -- news_type/keywords/entidades del LLM se
+                # guardan crudos en metadatos_ia, sin resolver todavia.
                 version = NoticiaVersion(
                     noticia_id=noticia.id,
                     numero_version=1,
                     titulo=item.segment.title,
-                    resumen="",
-                    transcripcion_texto="",
+                    resumen=item.segment.summary,
+                    transcripcion_texto=item.text,
+                    confianza={"overall": item.segment.confidence},
+                    metadatos_ia={
+                        "news_type": item.segment.news_type.value,
+                        "keywords": item.segment.keywords,
+                        "people": item.segment.people,
+                        "organizations": item.segment.organizations,
+                        "locations": item.segment.locations,
+                    },
                     es_generada_por_ia=True,
                 )
                 self._noticia_versiones.add(version)

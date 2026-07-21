@@ -15,7 +15,18 @@ def _word(i: int) -> Word:
 
 
 def _segment() -> NewsSegment:
-    return NewsSegment(title="t", start_word=0, end_word=1, confidence=0.9)
+    return NewsSegment(
+        title="t",
+        start_word=0,
+        end_word=1,
+        summary="s",
+        keywords=["k"],
+        news_type="otro",
+        people=[],
+        organizations=[],
+        locations=[],
+        confidence=0.9,
+    )
 
 
 def test_uses_primary_when_it_succeeds():

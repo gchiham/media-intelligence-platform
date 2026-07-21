@@ -20,6 +20,7 @@ from openai import OpenAI
 from src.modules.ai.chunking import chunk_words
 from src.modules.ai.exceptions import SegmentationError
 from src.modules.ai.providers.base import AIAnalysisProvider
+from src.modules.ai.providers.prompts import MAX_KEYWORDS
 from src.modules.ai.providers.prompts import RESPONSE_SCHEMA as _RESPONSE_SCHEMA
 from src.modules.ai.providers.prompts import SYSTEM_PROMPT
 from src.modules.ai.providers.prompts import render_chunk as _render_chunk
@@ -50,6 +51,7 @@ class OpenAIAnalysisProvider(AIAnalysisProvider):
 
         segments = []
         for item in raw["news"]:
+            item["keywords"] = item.get("keywords", [])[:MAX_KEYWORDS]
             seg = NewsSegment.model_validate(item)
             # Descarta rangos que el modelo se haya inventado fuera del chunk
             # que realmente vio, o invertidos.

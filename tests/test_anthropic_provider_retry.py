@@ -16,6 +16,21 @@ def _word(i: int) -> Word:
     return Word(index=i, word=f"palabra{i}", start=i * 0.3, end=i * 0.3 + 0.28)
 
 
+def _news_item() -> dict:
+    return {
+        "title": "t",
+        "start_word": 0,
+        "end_word": 1,
+        "summary": "s",
+        "keywords": ["k"],
+        "news_type": "otro",
+        "people": [],
+        "organizations": [],
+        "locations": [],
+        "confidence": 0.9,
+    }
+
+
 def _fake_response(news: list[dict]):
     tool_block = MagicMock()
     tool_block.type = "tool_use"
@@ -54,7 +69,7 @@ def provider() -> AnthropicAnalysisProvider:
 
 def test_succeeds_on_first_try_no_retry(provider):
     provider._client.messages.create = MagicMock(
-        return_value=_fake_response([{"title": "t", "start_word": 0, "end_word": 1, "confidence": 0.9}])
+        return_value=_fake_response([_news_item()])
     )
     segments = provider.segment_news([_word(0), _word(1)])
     assert len(segments) == 1

@@ -35,6 +35,7 @@ class ProcessedNews:
     start_time: float
     end_time: float
     clip: ClipResult
+    text: str
 
 
 class MediaProcessingOrchestrator:
@@ -62,6 +63,7 @@ class MediaProcessingOrchestrator:
                     start_time=timing.start_time,
                     end_time=timing.end_time,
                     clip=clip,
+                    text=self._extract_text(segment, words),
                 )
             )
 
@@ -71,3 +73,9 @@ class MediaProcessingOrchestrator:
     def _load_words(path: Path) -> list[Word]:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return [Word.model_validate(item) for item in raw]
+
+    @staticmethod
+    def _extract_text(segment: NewsSegment, words: list[Word]) -> str:
+        return " ".join(
+            w.word for w in words if segment.start_word <= w.index <= segment.end_word
+        )

@@ -14,7 +14,7 @@ from anthropic import Anthropic
 from src.modules.ai.chunking import chunk_words
 from src.modules.ai.exceptions import SegmentationError
 from src.modules.ai.providers.base import AIAnalysisProvider
-from src.modules.ai.providers.prompts import RESPONSE_SCHEMA, SYSTEM_PROMPT, render_chunk
+from src.modules.ai.providers.prompts import MAX_KEYWORDS, RESPONSE_SCHEMA, SYSTEM_PROMPT, render_chunk
 from src.modules.ai.schemas import NewsSegment, Word
 from src.shared.errors import PermanentPipelineError, TransientPipelineError, classify_and_wrap
 
@@ -44,6 +44,7 @@ class AnthropicAnalysisProvider(AIAnalysisProvider):
 
         segments = []
         for item in raw["news"]:
+            item["keywords"] = item.get("keywords", [])[:MAX_KEYWORDS]
             seg = NewsSegment.model_validate(item)
             # Descarta rangos que el modelo se haya inventado fuera del chunk
             # que realmente vio, o invertidos.
