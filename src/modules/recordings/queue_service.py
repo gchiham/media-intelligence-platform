@@ -10,7 +10,9 @@ siguiente corrida, aunque el script se corra de nuevo antes de que chepita
 termine.
 """
 import json
+import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from src.modules.recordings.models import EstadoGrabacion, Grabacion
 from src.modules.recordings.repositories import GrabacionRepository
@@ -43,8 +45,19 @@ class QueueService:
         self._capture_bucket = capture_bucket
         self._output_bucket = output_bucket
 
-    def enqueue_pending(self, limit: int = 500) -> EnqueueResult:
-        pendientes = self._grabaciones.list_pendientes(limit=limit)
+    def enqueue_pending(
+        self,
+        limit: int = 500,
+        programa_id: uuid.UUID | None = None,
+        fecha_desde: datetime | None = None,
+        fecha_hasta: datetime | None = None,
+    ) -> EnqueueResult:
+        pendientes = self._grabaciones.list_pendientes(
+            limit=limit,
+            programa_id=programa_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+        )
         encoladas = 0
         for grabacion in pendientes:
             self._publish(grabacion)

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import select
 
@@ -13,13 +14,21 @@ class GrabacionRepository(Repository[Grabacion]):
         stmt = select(Grabacion).where(Grabacion.s3_key == s3_key)
         return self._session.scalars(stmt).first()
 
-    def list_pendientes(self, limit: int = 100) -> list[Grabacion]:
-        stmt = (
-            select(Grabacion)
-            .where(Grabacion.estado == EstadoGrabacion.PENDIENTE)
-            .order_by(Grabacion.fecha_inicio.asc())
-            .limit(limit)
-        )
+    def list_pendientes(
+        self,
+        limit: int = 100,
+        programa_id: uuid.UUID | None = None,
+        fecha_desde: datetime | None = None,
+        fecha_hasta: datetime | None = None,
+    ) -> list[Grabacion]:
+        stmt = select(Grabacion).where(Grabacion.estado == EstadoGrabacion.PENDIENTE)
+        if programa_id is not None:
+            stmt = stmt.where(Grabacion.programa_id == programa_id)
+        if fecha_desde is not None:
+            stmt = stmt.where(Grabacion.fecha_inicio >= fecha_desde)
+        if fecha_hasta is not None:
+            stmt = stmt.where(Grabacion.fecha_inicio < fecha_hasta)
+        stmt = stmt.order_by(Grabacion.fecha_inicio.asc()).limit(limit)
         return list(self._session.scalars(stmt))
 
 

@@ -115,7 +115,14 @@ def prefetch_loop() -> None:
             t_dl = time.time()
 
             in_bucket, in_key = job["s3_input"].replace("s3://", "").split("/", 1)
-            local_audio = f"{WORK_DIR}/{station}.mp3"
+            # Nombre unico por job, no por estacion -- con muchos jobs
+            # seguidos de la misma estacion (caso normal en produccion), un
+            # nombre fijo por estacion hace que el prefetch del job N+1
+            # descargue sobre el mismo path que el _cleanup() del job N borra
+            # justo despues, tumbando el archivo recien descargado antes de
+            # usarse (visto en produccion: ~65% de fallos "No such file or
+            # directory" al lanzar 4 instancias contra un solo canal).
+            local_audio = f"{WORK_DIR}/{station}_{job_id}.mp3"
             s3.download_file(in_bucket, in_key, local_audio)
         except Exception as exc:
             audio_ref = job.get("s3_input") if isinstance(job, dict) else None
@@ -154,8 +161,8 @@ while idle_rounds < 3:
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0))
     log(f"START {station} wait_for_download={waited:.2f}s")
 
-    local_txt = f"{WORK_DIR}/{station}.txt"
-    local_words = f"{WORK_DIR}/{station}_words.json"
+    local_txt = f"{WORK_DIR}/{station}_{job_id}.txt"
+    local_words = f"{WORK_DIR}/{station}_{job_id}_words.json"
 
     try:
         result = transcription_provider.transcribe(local_audio)

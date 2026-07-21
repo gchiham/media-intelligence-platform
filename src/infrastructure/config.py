@@ -31,5 +31,10 @@ class Settings(BaseSettings):
     transcription_dlq_url: str = ""
     aws_region: str = "us-east-1"
 
+    # Solo lectura contra la DB del sistema capturador (Destroyer), tabla
+    # recording_coverage -- ver CoverageDiscoveryService. None hasta que se
+    # configure explicitamente (no todos los entornos la necesitan).
+    database_url_coverage: str | None = None
+
 
 settings = Settings()
