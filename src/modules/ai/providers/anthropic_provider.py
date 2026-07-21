@@ -59,7 +59,13 @@ class AnthropicAnalysisProvider(AIAnalysisProvider):
             try:
                 response = self._client.messages.create(
                     model=self._model,
-                    max_tokens=4096,
+                    # 4096 alcanzaba con el schema viejo (solo title/rango/confidence),
+                    # pero un chunk denso en titulares (varias decenas de noticias
+                    # cortas en 600 palabras, ej. un resumen de "titulares") puede
+                    # superar 4096 tokens de salida con summary+keywords+entidades
+                    # por item -- Claude corta el JSON a medias y la tool call
+                    # queda invalida. Visto en produccion al ampliar el schema.
+                    max_tokens=8192,
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": render_chunk(chunk)}],
                     tools=[
@@ -89,5 +95,16 @@ class AnthropicAnalysisProvider(AIAnalysisProvider):
     def _extract_tool_input(response: anthropic.types.Message) -> dict:
         for block in response.content:
             if block.type == "tool_use" and block.name == _TOOL_NAME:
+                if "news" not in block.input:
+                    # Tool call presente pero incompleta -- normalmente porque
+                    # se corto la generacion (stop_reason=max_tokens) antes de
+                    # cerrar el JSON. Se trata como transitorio: classify_and_wrap
+                    # clasifica un ValueError comun como TransientPipelineError
+                    # por default, asi que esto reintenta en vez de tumbar
+                    # segment_news entero con un KeyError sin capturar.
+                    raise ValueError(
+                        f"tool call sin 'news' (stop_reason={response.stop_reason}) -- "
+                        "probable corte por max_tokens"
+                    )
                 return block.input
         raise SegmentationError("Claude no devolvio la tool call esperada")
