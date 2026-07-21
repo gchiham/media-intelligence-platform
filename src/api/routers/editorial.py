@@ -13,8 +13,9 @@ import json
 import uuid
 from datetime import datetime
 
+import boto3
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from src.api.deps import (
     get_noticia_repository,
@@ -46,7 +47,7 @@ _ESTADO_COLORS = {
 }
 
 
-def _dashboard_row_html(row: dict) -> str:
+def _dashboard_row_html(row: dict, token: str) -> str:
     titulo = html.escape(row["titulo"] or "(sin titulo)")
     resumen = html.escape(row["resumen"] or "")
     transcripcion = html.escape(row["transcripcion_texto"] or "(sin transcripcion)")
@@ -68,6 +69,11 @@ def _dashboard_row_html(row: dict) -> str:
     keywords = meta.get("keywords") or []
     keywords_html = "".join(f'<span class="tag">{html.escape(str(k))}</span>' for k in keywords[:8])
 
+    player_html = ""
+    if row["clip_s3_uri"]:
+        clip_url = html.escape(f"/api/v1/news/{row['id']}/clip?token={token}")
+        player_html = f'<audio class="player" controls preload="none" src="{clip_url}"></audio>'
+
     return f"""
     <details class="row">
       <summary>
@@ -77,6 +83,7 @@ def _dashboard_row_html(row: dict) -> str:
       </summary>
       <div class="row-body">
         <p class="meta">{medio} &middot; {programa} &middot; prioridad: {prioridad} &middot; ai_score: {ai_score}</p>
+        {player_html}
         <p class="resumen"><strong>Resumen:</strong> {resumen}</p>
         <div class="tags">{keywords_html}</div>
         <p class="transcripcion-label">Transcripcion completa:</p>
@@ -172,6 +179,7 @@ _DASHBOARD_PAGE = """<!doctype html>
     margin: 0;
   }}
   .count {{ color: #6b7280; }}
+  .player {{ width: 100%; height: 32px; margin: 6px 0 10px; }}
 </style>
 </head>
 <body>
@@ -216,13 +224,40 @@ def news_dashboard(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     rows = noticias.listar_todas_con_detalle()
-    cards = "\n".join(_dashboard_row_html(row) for row in rows)
+    cards = "\n".join(_dashboard_row_html(row, token) for row in rows)
     page = _DASHBOARD_PAGE.format(
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         count=len(rows),
         cards=cards,
     )
     return HTMLResponse(content=page)
+
+
+@router.get(
+    "/{news_id}/clip",
+    include_in_schema=False,
+)
+def news_clip(
+    news_id: uuid.UUID,
+    token: str,
+    noticias: NoticiaRepository = Depends(get_noticia_repository),
+) -> RedirectResponse:
+    """Redirige (307) a una URL presignada de S3 para el clip de audio de
+    esta noticia -- el bucket es privado, asi que <audio src> no puede
+    apuntar directo a el. Misma proteccion por token que /dashboard, del
+    que este endpoint es soporte (no se usa suelto)."""
+    if not settings.dashboard_token or token != settings.dashboard_token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    noticia = noticias.get_by_id(news_id)
+    if noticia is None or not noticia.clip_s3_uri:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    bucket, _, key = noticia.clip_s3_uri.removeprefix("s3://").partition("/")
+    url = boto3.client("s3", region_name=settings.aws_region).generate_presigned_url(
+        "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=3600
+    )
+    return RedirectResponse(url)
 
 
 @router.get(

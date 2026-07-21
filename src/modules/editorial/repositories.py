@@ -9,6 +9,7 @@ _DASHBOARD_QUERY = text(
         n.id,
         n.estado,
         n.created_at,
+        n.clip_s3_uri,
         v.titulo,
         v.resumen,
         v.transcripcion_texto,
