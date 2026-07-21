@@ -11,6 +11,7 @@ _DASHBOARD_QUERY = text(
         n.created_at,
         v.titulo,
         v.resumen,
+        v.transcripcion_texto,
         v.prioridad,
         v.ai_score,
         v.metadatos_ia,

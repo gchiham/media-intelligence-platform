@@ -49,6 +49,7 @@ _ESTADO_COLORS = {
 def _dashboard_row_html(row: dict) -> str:
     titulo = html.escape(row["titulo"] or "(sin titulo)")
     resumen = html.escape(row["resumen"] or "")
+    transcripcion = html.escape(row["transcripcion_texto"] or "(sin transcripcion)")
     estado = row["estado"] or ""
     color = _ESTADO_COLORS.get(estado, "#9ca3af")
     created = row["created_at"]
@@ -68,16 +69,20 @@ def _dashboard_row_html(row: dict) -> str:
     keywords_html = "".join(f'<span class="tag">{html.escape(str(k))}</span>' for k in keywords[:8])
 
     return f"""
-    <article class="card">
-      <div class="card-header">
+    <details class="row">
+      <summary>
         <span class="badge" style="background:{color}">{html.escape(estado)}</span>
+        <span class="titulo">{titulo}</span>
         <span class="date">{created_str}</span>
+      </summary>
+      <div class="row-body">
+        <p class="meta">{medio} &middot; {programa} &middot; prioridad: {prioridad} &middot; ai_score: {ai_score}</p>
+        <p class="resumen"><strong>Resumen:</strong> {resumen}</p>
+        <div class="tags">{keywords_html}</div>
+        <p class="transcripcion-label">Transcripcion completa:</p>
+        <pre class="transcripcion">{transcripcion}</pre>
       </div>
-      <h2>{titulo}</h2>
-      <p class="meta">{medio} &middot; {programa} &middot; prioridad: {prioridad} &middot; ai_score: {ai_score}</p>
-      <p class="resumen">{resumen}</p>
-      <div class="tags">{keywords_html}</div>
-    </article>
+    </details>
     """
 
 
@@ -87,56 +92,91 @@ _DASHBOARD_PAGE = """<!doctype html>
 <meta charset="utf-8">
 <title>Dashboard de Noticias</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="60">
 <style>
   :root {{ color-scheme: light dark; }}
+  * {{ box-sizing: border-box; }}
   body {{
     font-family: -apple-system, Segoe UI, Roboto, sans-serif;
-    max-width: 900px;
+    max-width: 820px;
     margin: 0 auto;
-    padding: 24px;
+    padding: 20px 16px 60px;
     background: #0b0f14;
     color: #e5e7eb;
   }}
-  h1 {{ font-size: 1.5rem; margin-bottom: 4px; }}
-  .subtitle {{ color: #9ca3af; margin-top: 0; margin-bottom: 24px; }}
-  .card {{
+  h1 {{ font-size: 1.3rem; margin: 0 0 2px; }}
+  .subtitle {{ color: #6b7280; font-size: 0.8rem; margin: 0 0 16px; }}
+  .row {{
     background: #131922;
     border: 1px solid #232b36;
-    border-radius: 10px;
-    padding: 16px 20px;
-    margin-bottom: 14px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    overflow: hidden;
   }}
-  .card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+  .row[open] {{ border-color: #3b4454; }}
+  .row summary {{
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+  }}
+  .row summary::-webkit-details-marker {{ display: none; }}
+  .row summary:hover {{ background: #182130; }}
   .badge {{
+    flex: none;
     color: #0b0f14;
     font-weight: 600;
-    font-size: 0.75rem;
-    padding: 2px 10px;
+    font-size: 0.65rem;
+    padding: 2px 8px;
     border-radius: 999px;
     text-transform: uppercase;
   }}
-  .date {{ color: #6b7280; font-size: 0.85rem; }}
-  h2 {{ font-size: 1.1rem; margin: 6px 0; }}
-  .meta {{ color: #9ca3af; font-size: 0.85rem; margin: 4px 0; }}
-  .resumen {{ font-size: 0.95rem; line-height: 1.4; color: #d1d5db; }}
-  .tags {{ margin-top: 8px; }}
+  .titulo {{
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }}
+  .date {{ flex: none; color: #6b7280; font-size: 0.75rem; }}
+  .row-body {{ padding: 4px 14px 14px; border-top: 1px solid #1c2532; }}
+  .meta {{ color: #9ca3af; font-size: 0.8rem; margin: 10px 0 8px; }}
+  .resumen {{ font-size: 0.9rem; line-height: 1.4; color: #d1d5db; margin: 0 0 8px; }}
+  .tags {{ margin-bottom: 12px; }}
   .tag {{
     display: inline-block;
     background: #1f2937;
     color: #9ca3af;
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     padding: 2px 8px;
     border-radius: 6px;
     margin-right: 6px;
     margin-bottom: 4px;
   }}
-  .count {{ color: #6b7280; font-size: 0.85rem; }}
+  .transcripcion-label {{ color: #6b7280; font-size: 0.75rem; text-transform: uppercase; margin: 0 0 4px; }}
+  .transcripcion {{
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: inherit;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #c7cdd6;
+    background: #0e131a;
+    border: 1px solid #1c2532;
+    border-radius: 6px;
+    padding: 10px 12px;
+    max-height: 400px;
+    overflow-y: auto;
+    margin: 0;
+  }}
+  .count {{ color: #6b7280; }}
 </style>
 </head>
 <body>
   <h1>Dashboard de Noticias</h1>
-  <p class="subtitle">Generado {generated_at} &middot; <span class="count">{count} noticias</span> &middot; ordenadas de mas reciente a mas vieja &middot; se refresca solo cada 60s</p>
+  <p class="subtitle">Generado {generated_at} &middot; <span class="count">{count} noticias</span> &middot; mas reciente primero &middot; click en una fila para ver resumen + transcripcion completa</p>
   {cards}
 </body>
 </html>
