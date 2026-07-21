@@ -7,6 +7,7 @@ la API de Claude -- en su lugar se fuerza una tool call con `strict: True` y
 `tool_choice` fijo a esa tool, que da la misma garantia de forma de salida
 (ver skill claude-api, seccion "Structured Outputs" / "Strict tool use")."""
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
 from anthropic import Anthropic
@@ -23,19 +24,43 @@ _BACKOFF_SECONDS = [1, 2]  # espera antes del intento 2 y del intento 3
 
 _TOOL_NAME = "return_news_segments"
 
+# system y tools son identicos en cada llamada (solo cambia el chunk de
+# palabras en el mensaje de usuario) -- marcarlos como cache breakpoint deja
+# a Claude saltarse el prefill de esa parte en las siguientes llamadas de la
+# misma grabacion (y de grabaciones subsiguientes, TTL de 5 min por default).
+# Anthropic reporta hasta 85% menos latencia y ~90% menos costo en la porcion
+# cacheada -- ver docs/build-with-claude/prompt-caching.
+_CACHE_CONTROL = {"type": "ephemeral"}
+
 
 class AnthropicAnalysisProvider(AIAnalysisProvider):
-    def __init__(self, api_key: str, model: str = "claude-sonnet-5", chunk_size: int = 600):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-5",
+        chunk_size: int = 600,
+        max_concurrency: int = 5,
+    ):
         self._client = Anthropic(api_key=api_key)
         self._model = model
         self._chunk_size = chunk_size
+        self._max_concurrency = max_concurrency
 
     def segment_news(self, words: list[Word]) -> list[NewsSegment]:
-        segments: list[NewsSegment] = []
-        for chunk in chunk_words(words, self._chunk_size):
-            if not chunk:
-                continue
-            segments.extend(self._segment_chunk(chunk))
+        chunks = [c for c in chunk_words(words, self._chunk_size) if c]
+        if not chunks:
+            return []
+
+        # Los chunks son independientes entre si (cada uno solo necesita sus
+        # propias palabras + el mismo system prompt) -- no hay razon para
+        # esperar a que termine uno antes de mandar el siguiente. Antes esto
+        # era secuencial y una grabacion con ~13 chunks tardaba la suma de
+        # las 13 llamadas, una tras otra.
+        with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
+            resultados = pool.map(self._segment_chunk, chunks)
+            segments: list[NewsSegment] = []
+            for r in resultados:
+                segments.extend(r)
         return segments
 
     def _segment_chunk(self, chunk: list[Word]) -> list[NewsSegment]:
@@ -66,7 +91,7 @@ class AnthropicAnalysisProvider(AIAnalysisProvider):
                     # por item -- Claude corta el JSON a medias y la tool call
                     # queda invalida. Visto en produccion al ampliar el schema.
                     max_tokens=8192,
-                    system=SYSTEM_PROMPT,
+                    system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": _CACHE_CONTROL}],
                     messages=[{"role": "user", "content": render_chunk(chunk)}],
                     tools=[
                         {
@@ -74,6 +99,7 @@ class AnthropicAnalysisProvider(AIAnalysisProvider):
                             "description": "Devuelve las noticias detectadas en el chunk.",
                             "input_schema": RESPONSE_SCHEMA,
                             "strict": True,
+                            "cache_control": _CACHE_CONTROL,
                         }
                     ],
                     tool_choice={"type": "tool", "name": _TOOL_NAME},
