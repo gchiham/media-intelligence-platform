@@ -65,6 +65,9 @@ services:
       TRANSCRIPTION_DONE_QUEUE_URL: ${TRANSCRIPTION_DONE_QUEUE_URL:-}
       TRANSCRIPTION_DLQ_URL: ${TRANSCRIPTION_DLQ_URL:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
+      # Solo lectura contra la DB del sistema capturador (Destroyer), tabla
+      # recording_coverage -- ver CoverageDiscoveryService.
+      DATABASE_URL_COVERAGE: ${DATABASE_URL_COVERAGE:-}
     volumes:
       # Ver docs/DEPLOYMENT.md, seccion "Nota: audio/words vs LocalFileRecordingResolver"
       # -- LOCAL_MEDIA_DIR sigue siendo un directorio combinado por ahora.
