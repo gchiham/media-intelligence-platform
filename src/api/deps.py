@@ -25,8 +25,11 @@ from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersion
 from src.modules.editorial.services import NoticiaService
 from src.modules.pipeline.repositories import PipelineRunRepository
 from src.modules.pipeline.resolvers import (
+    ClipStorage,
     LocalFileRecordingResolver,
+    NullClipStorage,
     RecordingResolver,
+    S3ClipStorage,
     S3RecordingResolver,
 )
 from src.modules.pipeline.services import PipelineRunService
@@ -78,6 +81,17 @@ def get_recording_resolver(session: Session = Depends(get_db_session)) -> Record
     )
 
 
+def get_clip_storage() -> ClipStorage:
+    """Mismo criterio que get_recording_resolver: "s3" en produccion,
+    NullClipStorage en dev local sin credenciales AWS."""
+    if settings.recording_resolver == "s3":
+        return S3ClipStorage(
+            s3_client=boto3.client("s3", region_name=settings.aws_region),
+            bucket=settings.clips_bucket,
+        )
+    return NullClipStorage()
+
+
 def get_pipeline_run_service(session: Session = Depends(get_db_session)) -> PipelineRunService:
     # Sin fallback a otro modelo a proposito -- se prefiere que el
     # PipelineRun quede en ERROR (AnthropicAnalysisProvider ya reintenta 3
@@ -95,4 +109,5 @@ def get_pipeline_run_service(session: Session = Depends(get_db_session)) -> Pipe
         noticias=NoticiaRepository(session),
         noticia_versiones=NoticiaVersionRepository(session),
         orchestrator=orchestrator,
+        clip_storage=get_clip_storage(),
     )

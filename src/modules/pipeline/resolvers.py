@@ -65,6 +65,36 @@ class LocalFileRecordingResolver(RecordingResolver):
         )
 
 
+class ClipStorage(ABC):
+    """Puerto para subir un clip ya recortado (local) a almacenamiento durable.
+    Sin esto, MediaProcessingOrchestrator.clip_audio() escribe el clip en un
+    directorio temporal del backend que nunca se sube a ningun lado -- se
+    pierde si se limpia el disco o se recrea el contenedor."""
+
+    @abstractmethod
+    def upload(self, local_path: Path, key: str) -> str:
+        """Sube local_path y devuelve la URI (s3://bucket/key) del resultado."""
+        raise NotImplementedError
+
+
+class S3ClipStorage(ClipStorage):
+    def __init__(self, s3_client, bucket: str):
+        self._s3 = s3_client
+        self._bucket = bucket
+
+    def upload(self, local_path: Path, key: str) -> str:
+        self._s3.upload_file(str(local_path), self._bucket, key)
+        return f"s3://{self._bucket}/{key}"
+
+
+class NullClipStorage(ClipStorage):
+    """Contraparte de LocalFileRecordingResolver para dev local sin AWS --
+    no sube nada, deja el clip donde ya esta. clip_s3_uri queda NULL."""
+
+    def upload(self, local_path: Path, key: str) -> str:
+        raise RuntimeError("NullClipStorage no sube nada -- solo para dev local sin AWS")
+
+
 class S3RecordingResolver(RecordingResolver):
     def __init__(
         self,

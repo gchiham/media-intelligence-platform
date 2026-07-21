@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # provisionada fuera de este repo, ver docs/INFRASTRUCTURE.md).
     capture_bucket: str = "mediadev-recordings"
     transcribe_output_bucket: str = "media-intel-transcribe-050871635829"
+    # Clips de noticia (MediaProcessingOrchestrator.process_audio -> clip_audio)
+    # se generan en un directorio temporal del backend y, sin esto, se
+    # quedaban ahi para siempre -- nunca se subian a ningun lado durable.
+    clips_bucket: str = "media-intel-clips-050871635829"
     transcription_jobs_queue_url: str = ""
     transcription_done_queue_url: str = ""
     transcription_dlq_url: str = ""

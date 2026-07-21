@@ -19,6 +19,10 @@ from src.modules.editorial.models import EstadoNoticia, Noticia, NoticiaVersion
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
 from src.modules.pipeline.models import EstadoPipelineRun, PipelineRun
 from src.modules.pipeline.repositories import PipelineRunRepository
+from src.modules.pipeline.resolvers import ClipStorage
+from src.shared.logging_utils import get_logger
+
+logger = get_logger("pipeline_run_service")
 
 
 class PipelineRunService:
@@ -29,12 +33,14 @@ class PipelineRunService:
         noticias: NoticiaRepository,
         noticia_versiones: NoticiaVersionRepository,
         orchestrator: MediaProcessingOrchestrator,
+        clip_storage: ClipStorage,
     ):
         self._session = session
         self._pipeline_runs = pipeline_runs
         self._noticias = noticias
         self._noticia_versiones = noticia_versiones
         self._orchestrator = orchestrator
+        self._clip_storage = clip_storage
 
     def run(self, grabacion_id: uuid.UUID, job: ProcessAudioJob) -> PipelineRun:
         # Idempotencia (docs/INGESTION_DESIGN.md, punto 6): si esta Grabacion
@@ -57,13 +63,16 @@ class PipelineRunService:
         try:
             processed_news = self._orchestrator.process_audio(job)
 
-            for item in processed_news:
+            for i, item in enumerate(processed_news):
+                clip_s3_uri = self._upload_clip(grabacion_id, i, item.clip.output_path)
+
                 noticia = Noticia(
                     grabacion_id=grabacion_id,
                     pipeline_run_id=pipeline_run.id,
                     estado=EstadoNoticia.PENDIENTE,
                     clip_inicio_seg=item.start_time,
                     clip_fin_seg=item.end_time,
+                    clip_s3_uri=clip_s3_uri,
                 )
                 self._noticias.add(noticia)
                 self._session.flush()  # asigna noticia.id sin cerrar la transaccion
@@ -98,7 +107,6 @@ class PipelineRunService:
             pipeline_run.noticias_generadas = len(processed_news)
             pipeline_run.metadatos = {
                 "padding_seconds": job.padding_seconds,
-                "clips": [str(item.clip.output_path) for item in processed_news],
                 "segmentos_detectados": [
                     {"titulo": item.segment.title, "confidence": item.segment.confidence}
                     for item in processed_news
@@ -115,3 +123,20 @@ class PipelineRunService:
             raise
 
         return pipeline_run
+
+    def _upload_clip(self, grabacion_id: uuid.UUID, index: int, local_path) -> str | None:
+        # Un fallo de subida no debe tumbar el PipelineRun completo -- la
+        # noticia y su texto ya son validos sin el audio; clip_s3_uri
+        # simplemente queda NULL y se puede reintentar la subida despues.
+        key = f"{grabacion_id}/news_{index:03d}.mp3"
+        try:
+            uri = self._clip_storage.upload(local_path, key)
+        except Exception as exc:
+            logger.warning(
+                "fallo al subir clip a S3, continua sin el",
+                extra={"extra_fields": {"grabacion_id": str(grabacion_id), "key": key, "error": str(exc)}},
+            )
+            return None
+
+        local_path.unlink(missing_ok=True)
+        return uri

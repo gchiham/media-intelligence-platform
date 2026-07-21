@@ -49,6 +49,10 @@ class Noticia(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     clip_inicio_seg: Mapped[float] = mapped_column(Float, nullable=False)
     clip_fin_seg: Mapped[float] = mapped_column(Float, nullable=False)
+    # Nullable: solo se llena si ClipStorage.upload() tuvo exito -- un fallo
+    # de subida no debe tumbar el PipelineRun completo (la noticia y su
+    # texto ya son validos sin el audio).
+    clip_s3_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     # Bloqueo editorial (FR-051): mientras un periodista tiene la noticia en
     # EN_REVISION, queda asignada solo a el -- nadie mas puede editarla ni

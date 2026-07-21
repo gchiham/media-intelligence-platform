@@ -23,6 +23,7 @@ from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersion
 from src.modules.media.models import Medio, Programa, TipoMedio
 from src.modules.pipeline.models import PipelineRun
 from src.modules.pipeline.repositories import PipelineRunRepository
+from src.modules.pipeline.resolvers import NullClipStorage
 from src.modules.pipeline.services import PipelineRunService
 from src.modules.recordings.models import EstadoGrabacion, Grabacion
 
@@ -84,6 +85,7 @@ def test_second_run_returns_existing_pipeline_run_without_reprocessing(session, 
         noticias=NoticiaRepository(session),
         noticia_versiones=NoticiaVersionRepository(session),
         orchestrator=orchestrator,
+        clip_storage=NullClipStorage(),
     )
     job = ProcessAudioJob(
         words_json_path=tmp_path / "words.json", audio_path=tmp_path / "audio.mp3", output_dir=tmp_path / "clips",

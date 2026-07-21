@@ -28,6 +28,7 @@ from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersion
 from src.modules.media.models import Medio, Programa
 from src.modules.pipeline.models import EstadoPipelineRun, PipelineRun
 from src.modules.pipeline.repositories import PipelineRunRepository
+from src.modules.pipeline.resolvers import NullClipStorage
 from src.modules.pipeline.services import PipelineRunService
 from src.modules.recordings.models import Grabacion
 
@@ -95,6 +96,7 @@ def test_process_audio_persists_pipeline_run_and_news(
         noticias=NoticiaRepository(session),
         noticia_versiones=NoticiaVersionRepository(session),
         orchestrator=orchestrator,
+        clip_storage=NullClipStorage(),
     )
     job = ProcessAudioJob(
         words_json_path=FIXTURES / "sample_words.json",
