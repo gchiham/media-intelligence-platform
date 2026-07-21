@@ -69,6 +69,8 @@ services:
       # Solo lectura contra la DB del sistema capturador (Destroyer), tabla
       # recording_coverage -- ver CoverageDiscoveryService.
       DATABASE_URL_COVERAGE: ${DATABASE_URL_COVERAGE:-}
+      # GET /api/v1/news/dashboard -- ver src/api/routers/editorial.py.
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:-}
     volumes:
       # Ver docs/DEPLOYMENT.md, seccion "Nota: audio/words vs LocalFileRecordingResolver"
       # -- LOCAL_MEDIA_DIR sigue siendo un directorio combinado por ahora.
