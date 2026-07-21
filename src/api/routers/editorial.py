@@ -75,7 +75,7 @@ def _dashboard_row_html(row: dict, token: str) -> str:
         player_html = f'<audio class="player" controls preload="none" src="{clip_url}"></audio>'
 
     return f"""
-    <details class="row">
+    <details class="row" data-medio="{html.escape(row["medio_nombre"] or "-")}">
       <summary>
         <span class="badge" style="background:{color}">{html.escape(estado)}</span>
         <span class="titulo">{titulo}</span>
@@ -91,6 +91,19 @@ def _dashboard_row_html(row: dict, token: str) -> str:
       </div>
     </details>
     """
+
+
+def _dashboard_tabs_html(rows: list[dict]) -> str:
+    counts: dict[str, int] = {}
+    for row in rows:
+        medio = row["medio_nombre"] or "-"
+        counts[medio] = counts.get(medio, 0) + 1
+
+    tabs = [f'<button class="tab active" data-medio="__all__">Todas ({len(rows)})</button>']
+    for medio in sorted(counts):
+        medio_esc = html.escape(medio)
+        tabs.append(f'<button class="tab" data-medio="{medio_esc}">{medio_esc} ({counts[medio]})</button>')
+    return "\n".join(tabs)
 
 
 _DASHBOARD_PAGE = """<!doctype html>
@@ -112,6 +125,31 @@ _DASHBOARD_PAGE = """<!doctype html>
   }}
   h1 {{ font-size: 1.3rem; margin: 0 0 2px; }}
   .subtitle {{ color: #6b7280; font-size: 0.8rem; margin: 0 0 16px; }}
+  .tabs {{
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 0;
+    margin-bottom: 10px;
+    background: #0b0f14;
+    border-bottom: 1px solid #232b36;
+  }}
+  .tab {{
+    background: #131922;
+    border: 1px solid #232b36;
+    color: #9ca3af;
+    font-size: 0.78rem;
+    padding: 5px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+  }}
+  .tab:hover {{ background: #182130; }}
+  .tab.active {{ background: #3b4454; color: #e5e7eb; border-color: #3b4454; }}
+  .row.hidden {{ display: none; }}
   .row {{
     background: #131922;
     border: 1px solid #232b36;
@@ -185,7 +223,29 @@ _DASHBOARD_PAGE = """<!doctype html>
 <body>
   <h1>Dashboard de Noticias</h1>
   <p class="subtitle">Generado {generated_at} &middot; <span class="count">{count} noticias</span> &middot; mas reciente primero &middot; click en una fila para ver resumen + transcripcion completa</p>
-  {cards}
+  <div class="tabs" id="tabs">
+    {tabs}
+  </div>
+  <div id="rows">
+    {cards}
+  </div>
+  <script>
+    (function() {{
+      var tabs = document.querySelectorAll('.tab');
+      var rows = document.querySelectorAll('.row');
+      tabs.forEach(function(tab) {{
+        tab.addEventListener('click', function() {{
+          tabs.forEach(function(t) {{ t.classList.remove('active'); }});
+          tab.classList.add('active');
+          var medio = tab.getAttribute('data-medio');
+          rows.forEach(function(row) {{
+            var show = medio === '__all__' || row.getAttribute('data-medio') === medio;
+            row.classList.toggle('hidden', !show);
+          }});
+        }});
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """
@@ -228,6 +288,7 @@ def news_dashboard(
     page = _DASHBOARD_PAGE.format(
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         count=len(rows),
+        tabs=_dashboard_tabs_html(rows),
         cards=cards,
     )
     return HTMLResponse(content=page)
