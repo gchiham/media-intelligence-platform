@@ -48,14 +48,35 @@ _ESTADO_COLORS = {
 }
 
 
-def _dashboard_row_html(row: dict, token: str) -> str:
+def _dashboard_row_html(row: dict) -> str:
+    """Fila compacta para GET /news/dashboard -- a proposito NO incluye
+    resumen/transcripcion/keywords (eso es `_dashboard_detail_html`, cargado
+    bajo demanda) para que el HTML inicial no pese ~8MB con miles de
+    noticias. `data-loaded` marca si el detalle ya se pidio, ver el JS."""
     titulo = html.escape(row["titulo"] or "(sin titulo)")
-    resumen = html.escape(row["resumen"] or "")
-    transcripcion = html.escape(row["transcripcion_texto"] or "(sin transcripcion)")
     estado = row["estado"] or ""
     color = _ESTADO_COLORS.get(estado, "#9ca3af")
     created = row["created_at"]
     created_str = created.strftime("%Y-%m-%d %H:%M:%S") if created else "-"
+
+    return f"""
+    <details class="row" data-id="{row["id"]}" data-medio="{html.escape(row["medio_nombre"] or "-")}">
+      <summary>
+        <span class="badge" style="background:{color}">{html.escape(estado)}</span>
+        <span class="titulo">{titulo}</span>
+        <span class="date">{created_str}</span>
+      </summary>
+      <div class="row-body"><p class="loading">Cargando...</p></div>
+    </details>
+    """
+
+
+def _dashboard_detail_html(row: dict, token: str) -> str:
+    """Cuerpo completo de una noticia (resumen, transcripcion, keywords,
+    audio) -- servido por GET /news/{news_id}/detail, inyectado via JS
+    solo cuando el usuario abre esa fila."""
+    resumen = html.escape(row["resumen"] or "")
+    transcripcion = html.escape(row["transcripcion_texto"] or "(sin transcripcion)")
     medio = html.escape(row["medio_nombre"] or "-")
     programa = html.escape(row["programa_nombre"] or "-")
     prioridad = html.escape(row["prioridad"] or "-")
@@ -76,21 +97,12 @@ def _dashboard_row_html(row: dict, token: str) -> str:
         player_html = f'<audio class="player" controls preload="none" src="{clip_url}"></audio>'
 
     return f"""
-    <details class="row" data-id="{row["id"]}" data-medio="{html.escape(row["medio_nombre"] or "-")}">
-      <summary>
-        <span class="badge" style="background:{color}">{html.escape(estado)}</span>
-        <span class="titulo">{titulo}</span>
-        <span class="date">{created_str}</span>
-      </summary>
-      <div class="row-body">
         <p class="meta">{medio} &middot; {programa} &middot; prioridad: {prioridad} &middot; ai_score: {ai_score}</p>
         {player_html}
         <p class="resumen"><strong>Resumen:</strong> {resumen}</p>
         <div class="tags">{keywords_html}</div>
         <p class="transcripcion-label">Transcripcion completa:</p>
         <pre class="transcripcion">{transcripcion}</pre>
-      </div>
-    </details>
     """
 
 
@@ -220,6 +232,7 @@ _DASHBOARD_PAGE = """<!doctype html>
   }}
   .date {{ flex: none; color: #6b7280; font-size: 0.75rem; }}
   .row-body {{ padding: 4px 14px 14px; border-top: 1px solid #1c2532; }}
+  .loading {{ color: #6b7280; font-size: 0.85rem; margin: 10px 0; }}
   .meta {{ color: #9ca3af; font-size: 0.8rem; margin: 10px 0 8px; }}
   .resumen {{ font-size: 0.9rem; line-height: 1.4; color: #d1d5db; margin: 0 0 8px; }}
   .tags {{ margin-bottom: 12px; }}
@@ -290,6 +303,24 @@ _DASHBOARD_PAGE = """<!doctype html>
             var show = medio === '__all__' || row.getAttribute('data-medio') === medio;
             row.classList.toggle('hidden', !show);
           }});
+        }});
+      }});
+
+      rows.forEach(function(row) {{
+        row.addEventListener('toggle', function() {{
+          if (!row.open || row.dataset.loaded) return;
+          row.dataset.loaded = '1';
+          var body = row.querySelector('.row-body');
+          fetch('/api/v1/news/' + row.getAttribute('data-id') + '/detail?token=' + encodeURIComponent(token))
+            .then(function(r) {{
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              return r.text();
+            }})
+            .then(function(htmlText) {{ body.innerHTML = htmlText; }})
+            .catch(function(err) {{
+              body.innerHTML = '<p class="loading">Error cargando: ' + err.message + '</p>';
+              row.dataset.loaded = '';
+            }});
         }});
       }});
 
@@ -374,8 +405,8 @@ def news_dashboard(
     if not settings.dashboard_token or token != settings.dashboard_token:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    rows = noticias.listar_todas_con_detalle()
-    cards = "\n".join(_dashboard_row_html(row, token) for row in rows)
+    rows = noticias.listar_todas_resumen()
+    cards = "\n".join(_dashboard_row_html(row) for row in rows)
     page = _DASHBOARD_PAGE.format(
         generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         count=len(rows),
@@ -383,6 +414,30 @@ def news_dashboard(
         cards=cards,
     )
     return HTMLResponse(content=page)
+
+
+@router.get(
+    "/{news_id}/detail",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+def news_detail(
+    news_id: uuid.UUID,
+    token: str,
+    noticias: NoticiaRepository = Depends(get_noticia_repository),
+) -> HTMLResponse:
+    """Cuerpo completo de una noticia (resumen/transcripcion/keywords/audio),
+    pedido por JS solo cuando el usuario abre esa fila en el dashboard --
+    ver `_dashboard_detail_html` y el peso de ~8MB que esto evita mandar de
+    entrada con las ~3000+ noticias."""
+    if not settings.dashboard_token or token != settings.dashboard_token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    row = noticias.obtener_detalle(news_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return HTMLResponse(content=_dashboard_detail_html(row, token))
 
 
 _EXPAND_THRESHOLD = 3  # si el ILIKE plano ya trae esto o mas, no se llama al LLM

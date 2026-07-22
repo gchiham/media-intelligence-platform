@@ -3,7 +3,29 @@ from sqlalchemy import select, text
 from src.infrastructure.db.repository import Repository
 from src.modules.editorial.models import EstadoNoticia, MonitoringProfile, Noticia, NoticiaVersion
 
-_DASHBOARD_QUERY = text(
+# Liviana a proposito: GET /news/dashboard manda esto para las ~3000+
+# noticias de una sola vez, asi que NO incluye resumen/transcripcion/keywords
+# (eso pesaba ~8MB de HTML con todas las noticias inline, muy pesado para
+# celular/datos moviles) -- el detalle completo se carga bajo demanda, ver
+# `obtener_detalle`, solo cuando el usuario abre esa noticia especifica.
+_DASHBOARD_LIST_QUERY = text(
+    """
+    SELECT
+        n.id,
+        n.estado,
+        n.created_at,
+        v.titulo,
+        m.nombre AS medio_nombre
+    FROM noticias n
+    LEFT JOIN noticia_versiones v ON v.id = n.version_actual_id
+    LEFT JOIN grabaciones g ON g.id = n.grabacion_id
+    LEFT JOIN programas p ON p.id = g.programa_id
+    LEFT JOIN medios m ON m.id = p.medio_id
+    ORDER BY n.created_at DESC
+    """
+)
+
+_DETALLE_QUERY = text(
     """
     SELECT
         n.id,
@@ -23,7 +45,7 @@ _DASHBOARD_QUERY = text(
     LEFT JOIN grabaciones g ON g.id = n.grabacion_id
     LEFT JOIN programas p ON p.id = g.programa_id
     LEFT JOIN medios m ON m.id = p.medio_id
-    ORDER BY n.created_at DESC
+    WHERE n.id = :id
     """
 )
 
@@ -58,23 +80,25 @@ class NoticiaRepository(Repository[Noticia]):
         )
         return list(self._session.scalars(stmt))
 
-    def listar_todas_con_detalle(self) -> list[dict]:
-        """Lectura de reporte para GET /news/dashboard -- todas las noticias
-        (cualquier estado), mas reciente primero, con medio/programa via un
-        solo query (evita N+1). No pasa por el modelo Noticia a proposito:
-        es una proyeccion de solo lectura para UI, no una operacion de dominio."""
-        rows = self._session.execute(_DASHBOARD_QUERY).mappings()
+    def listar_todas_resumen(self) -> list[dict]:
+        """Lectura liviana para GET /news/dashboard -- todas las noticias
+        (cualquier estado), mas reciente primero, solo lo necesario para la
+        lista/tabs/busqueda. Ver `obtener_detalle` para el resto por noticia."""
+        rows = self._session.execute(_DASHBOARD_LIST_QUERY).mappings()
         return [dict(row) for row in rows]
 
+    def obtener_detalle(self, noticia_id) -> dict | None:
+        """Detalle completo (resumen, transcripcion, keywords, clip) de una
+        sola noticia -- cargado bajo demanda cuando el usuario abre esa fila
+        en el dashboard, ver GET /news/{news_id}/detail."""
+        row = self._session.execute(_DETALLE_QUERY, {"id": noticia_id}).mappings().first()
+        return dict(row) if row else None
+
     def buscar_candidatos(self, terminos: list[str], limit: int = 150) -> list[dict]:
-        """Prefiltro barato para iSearch (GET /news/search): ILIKE por
-        palabra sobre titulo/resumen/transcripcion/keywords -- sin pg_trgm ni
-        pgvector a proposito (ver docs/API.md, seccion iSearch). Reduce el
-        universo de ~miles de noticias a un puñado de candidatos antes de
-        que el LLM entre a razonar sobre relevancia real; el LLM tolera
-        typos/variantes en el candidato que sí haya pasado el filtro, pero
-        un termino que no aparezca ni parcialmente en ningun campo no va a
-        generar match aqui -- limitacion conocida y aceptada por ahora."""
+        """Busqueda de texto para GET /news/search: ILIKE por palabra sobre
+        titulo/resumen/transcripcion/keywords/medio -- sin LLM, sin costo por
+        busqueda, y a proposito sin pg_trgm/pgvector (solo coincidencia
+        parcial de substring, no tolera errores ortograficos ni sinonimos)."""
         if not terminos:
             return []
 
