@@ -66,6 +66,49 @@ class NoticiaRepository(Repository[Noticia]):
         rows = self._session.execute(_DASHBOARD_QUERY).mappings()
         return [dict(row) for row in rows]
 
+    def buscar_candidatos(self, terminos: list[str], limit: int = 150) -> list[dict]:
+        """Prefiltro barato para iSearch (GET /news/search): ILIKE por
+        palabra sobre titulo/resumen/transcripcion/keywords -- sin pg_trgm ni
+        pgvector a proposito (ver docs/API.md, seccion iSearch). Reduce el
+        universo de ~miles de noticias a un puñado de candidatos antes de
+        que el LLM entre a razonar sobre relevancia real; el LLM tolera
+        typos/variantes en el candidato que sí haya pasado el filtro, pero
+        un termino que no aparezca ni parcialmente en ningun campo no va a
+        generar match aqui -- limitacion conocida y aceptada por ahora."""
+        if not terminos:
+            return []
+
+        clausulas = []
+        params: dict[str, str] = {}
+        for i, termino in enumerate(terminos):
+            key = f"t{i}"
+            params[key] = f"%{termino}%"
+            clausulas.append(
+                f"(v.titulo ILIKE :{key} OR v.resumen ILIKE :{key} "
+                f"OR v.transcripcion_texto ILIKE :{key} OR v.metadatos_ia::text ILIKE :{key} "
+                f"OR m.nombre ILIKE :{key})"
+            )
+        where_sql = " OR ".join(clausulas)
+        params["limit"] = limit
+
+        query = text(
+            f"""
+            SELECT
+                n.id, n.created_at, v.titulo, v.resumen, v.metadatos_ia,
+                m.nombre AS medio_nombre
+            FROM noticias n
+            LEFT JOIN noticia_versiones v ON v.id = n.version_actual_id
+            LEFT JOIN grabaciones g ON g.id = n.grabacion_id
+            LEFT JOIN programas p ON p.id = g.programa_id
+            LEFT JOIN medios m ON m.id = p.medio_id
+            WHERE {where_sql}
+            ORDER BY n.created_at DESC
+            LIMIT :limit
+            """
+        )
+        rows = self._session.execute(query, params).mappings()
+        return [dict(row) for row in rows]
+
 
 class NoticiaVersionRepository(Repository[NoticiaVersion]):
     """NewsVersion."""

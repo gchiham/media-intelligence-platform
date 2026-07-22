@@ -10,6 +10,7 @@ para esto: usa SELECT FOR UPDATE y bloquearia filas solo por listarlas.
 """
 import html
 import json
+import time
 import uuid
 from datetime import datetime
 
@@ -34,9 +35,18 @@ from src.api.schemas.editorial import (
 from src.infrastructure.config import settings
 from src.modules.editorial.models import Noticia
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
+from src.modules.editorial.search import rerank_candidatos
 from src.modules.editorial.services import NoticiaService
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+# Rate limit de iSearch (cada busqueda gasta una llamada real al LLM) --
+# proceso en memoria, un solo contador global porque el dashboard tiene un
+# unico token, no usuarios individuales. Suficiente para evitar una factura
+# sorpresa por un loop/bot, no para multi-tenant real.
+_SEARCH_WINDOW_SECONDS = 3600
+_SEARCH_MAX_PER_WINDOW = 60
+_search_timestamps: list[float] = []
 
 _ESTADO_COLORS = {
     "pendiente": "#9ca3af",
@@ -75,10 +85,11 @@ def _dashboard_row_html(row: dict, token: str) -> str:
         player_html = f'<audio class="player" controls preload="none" src="{clip_url}"></audio>'
 
     return f"""
-    <details class="row" data-medio="{html.escape(row["medio_nombre"] or "-")}">
+    <details class="row" data-id="{row["id"]}" data-medio="{html.escape(row["medio_nombre"] or "-")}">
       <summary>
         <span class="badge" style="background:{color}">{html.escape(estado)}</span>
         <span class="titulo">{titulo}</span>
+        <span class="why"></span>
         <span class="date">{created_str}</span>
       </summary>
       <div class="row-body">
@@ -125,6 +136,48 @@ _DASHBOARD_PAGE = """<!doctype html>
   }}
   h1 {{ font-size: 1.3rem; margin: 0 0 2px; }}
   .subtitle {{ color: #6b7280; font-size: 0.8rem; margin: 0 0 16px; }}
+  .search {{
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    gap: 8px;
+    padding: 10px 0 0;
+    background: #0b0f14;
+  }}
+  .search input {{
+    flex: 1;
+    background: #131922;
+    border: 1px solid #232b36;
+    color: #e5e7eb;
+    font-size: 0.9rem;
+    padding: 8px 12px;
+    border-radius: 8px;
+    outline: none;
+  }}
+  .search input:focus {{ border-color: #3b4454; }}
+  .search button {{
+    background: #3b4454;
+    color: #e5e7eb;
+    border: none;
+    font-size: 0.85rem;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+  }}
+  .search button:hover {{ background: #4b5568; }}
+  .search .clear {{ background: transparent; border: 1px solid #232b36; color: #9ca3af; display: none; }}
+  .search-status {{ color: #6b7280; font-size: 0.78rem; margin: 8px 0 0; min-height: 1.1em; }}
+  .why {{
+    flex: none;
+    color: #7dd3a8;
+    font-size: 0.75rem;
+    font-style: italic;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }}
   .tabs {{
     position: sticky;
     top: 0;
@@ -223,6 +276,12 @@ _DASHBOARD_PAGE = """<!doctype html>
 <body>
   <h1>Dashboard de Noticias</h1>
   <p class="subtitle">Generado {generated_at} &middot; <span class="count">{count} noticias</span> &middot; mas reciente primero &middot; click en una fila para ver resumen + transcripcion completa</p>
+  <div class="search">
+    <input type="text" id="search-input" placeholder="iSearch: ej. Juan Orlando, Secretaria de Seguridad..." />
+    <button id="search-btn">Buscar</button>
+    <button id="search-clear" class="clear">Limpiar</button>
+  </div>
+  <p class="search-status" id="search-status"></p>
   <div class="tabs" id="tabs">
     {tabs}
   </div>
@@ -232,7 +291,16 @@ _DASHBOARD_PAGE = """<!doctype html>
   <script>
     (function() {{
       var tabs = document.querySelectorAll('.tab');
-      var rows = document.querySelectorAll('.row');
+      var rowsContainer = document.getElementById('rows');
+      var rows = Array.prototype.slice.call(document.querySelectorAll('.row'));
+      var originalOrder = rows.slice();
+      var token = new URLSearchParams(window.location.search).get('token');
+      var searchInput = document.getElementById('search-input');
+      var searchBtn = document.getElementById('search-btn');
+      var searchClear = document.getElementById('search-clear');
+      var searchStatus = document.getElementById('search-status');
+      var tabsBar = document.getElementById('tabs');
+
       tabs.forEach(function(tab) {{
         tab.addEventListener('click', function() {{
           tabs.forEach(function(t) {{ t.classList.remove('active'); }});
@@ -243,6 +311,59 @@ _DASHBOARD_PAGE = """<!doctype html>
             row.classList.toggle('hidden', !show);
           }});
         }});
+      }});
+
+      function clearWhy() {{
+        rows.forEach(function(row) {{ row.querySelector('.why').textContent = ''; }});
+      }}
+
+      function runSearch() {{
+        var q = searchInput.value.trim();
+        if (!q) return;
+        searchStatus.textContent = 'Buscando...';
+        searchBtn.disabled = true;
+        fetch('/api/v1/news/search?token=' + encodeURIComponent(token) + '&q=' + encodeURIComponent(q))
+          .then(function(r) {{
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          }})
+          .then(function(data) {{
+            clearWhy();
+            var byId = {{}};
+            data.results.forEach(function(r) {{ byId[r.id] = r; }});
+            rows.forEach(function(row) {{
+              var match = byId[row.getAttribute('data-id')];
+              row.classList.toggle('hidden', !match);
+              if (match) row.querySelector('.why').textContent = '\\ud83d\\udd0e ' + match.why;
+            }});
+            data.results
+              .map(function(r) {{ return rowsContainer.querySelector('[data-id="' + r.id + '"]'); }})
+              .forEach(function(el) {{ if (el) rowsContainer.appendChild(el); }});
+            tabsBar.style.display = 'none';
+            searchClear.style.display = 'inline-block';
+            searchStatus.textContent = data.count + ' resultado(s) para "' + data.query + '"';
+          }})
+          .catch(function(err) {{
+            searchStatus.textContent = 'Error buscando: ' + err.message;
+          }})
+          .finally(function() {{ searchBtn.disabled = false; }});
+      }}
+
+      function clearSearch() {{
+        searchInput.value = '';
+        searchStatus.textContent = '';
+        clearWhy();
+        originalOrder.forEach(function(el) {{ rowsContainer.appendChild(el); }});
+        tabsBar.style.display = '';
+        searchClear.style.display = 'none';
+        var activeTab = document.querySelector('.tab.active') || tabs[0];
+        activeTab.click();
+      }}
+
+      searchBtn.addEventListener('click', runSearch);
+      searchClear.addEventListener('click', clearSearch);
+      searchInput.addEventListener('keydown', function(e) {{
+        if (e.key === 'Enter') runSearch();
       }});
     }})();
   </script>
@@ -292,6 +413,56 @@ def news_dashboard(
         cards=cards,
     )
     return HTMLResponse(content=page)
+
+
+@router.get(
+    "/search",
+    status_code=status.HTTP_200_OK,
+    summary="iSearch: busqueda inteligente de noticias",
+    description=(
+        "Prefiltro barato en Postgres (ILIKE) para acotar candidatos, seguido de un "
+        "LLM que decide relevancia real y explica por que -- tolera variantes, alias y "
+        "errores ortograficos que el prefiltro solo no resolveria. Ver "
+        "src/modules/editorial/search.py. Protegida por `token`, con rate limit."
+    ),
+)
+def news_search(
+    token: str,
+    q: str,
+    noticias: NoticiaRepository = Depends(get_noticia_repository),
+) -> dict:
+    if not settings.dashboard_token or token != settings.dashboard_token:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    q = q.strip()
+    if not q:
+        return {"query": q, "count": 0, "results": []}
+
+    now = time.time()
+    while _search_timestamps and _search_timestamps[0] < now - _SEARCH_WINDOW_SECONDS:
+        _search_timestamps.pop(0)
+    if len(_search_timestamps) >= _SEARCH_MAX_PER_WINDOW:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Limite de busquedas alcanzado, intenta de nuevo en un rato.",
+        )
+    _search_timestamps.append(now)
+
+    if not settings.anthropic_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="iSearch no esta configurado (falta ANTHROPIC_API_KEY).",
+        )
+
+    terminos = [t for t in q.split() if len(t) >= 2][:8]
+    candidatos = noticias.buscar_candidatos(terminos)
+    results = rerank_candidatos(
+        query=q,
+        candidatos=candidatos,
+        api_key=settings.anthropic_api_key.get_secret_value(),
+        model=settings.anthropic_model,
+    )
+    return {"query": q, "count": len(results), "results": results}
 
 
 @router.get(
