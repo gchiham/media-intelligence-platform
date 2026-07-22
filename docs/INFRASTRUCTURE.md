@@ -21,7 +21,8 @@ Cuenta AWS: `050871635829` (usuario `media-intelligence-dev`). Región: `us-east
 
 | AMI | AMI ID | Base | Descripción |
 |---|---|---|---|
-| `CHEPITA-L4-g6xlarge-20260719` | **`ami-098f304c0a5513eba`** | g6.xlarge, GPU L4 | Faster-Whisper Small, int8_float16, batch_size=24, word_timestamps, TranscriptionProvider + DLQ ya desplegados. **Usar este para relanzar chepita**, no el AMI viejo. |
+| `CHEPITA-L4-v1.1.0` | **`ami-0b3179b61a0f3c625`** | g6.xlarge, GPU L4 | Igual que v1.0.0 + `worker_prefetch.py` con publish a `media-intel-transcription-done`/`DONE_QUEUE_URL` (faltaba en v1.0.0 pese a estar en el repo -- ver historial de versiones abajo). **Usar este para relanzar chepita**, no el AMI viejo. |
+| `CHEPITA-L4-g6xlarge-20260719` (v1.0.0, no usar para relanzar) | `ami-098f304c0a5513eba` | g6.xlarge, GPU L4 | Le falta el publish a `media-intel-transcription-done` -- cualquier instancia lanzada desde este AMI transcribe y sube a S3 bien, pero sus resultados nunca llegan a Postgres. Mantener solo como rollback hasta validar v1.1.0 en uso real. |
 | `CHEPITA` (anterior, no usar para relanzar producción) | `ami-02b763fe7507a3a11` | — | Horneado desde la instancia de *bench* (T4), no de producción (L4) — el nombre es engañoso, quedó ahí de antes de esta sesión. |
 
 ### Versionado de AMIs
@@ -48,10 +49,11 @@ Semver (`vMAJOR.MINOR.PATCH`) en el **Name** del AMI — es el único campo conf
 | Versión | AMI ID | Fecha | Qué cambió | Validación |
 |---|---|---|---|---|
 | `v1.0.0` | `ami-098f304c0a5513eba` | 2026-07-19 | Primera versión versionada formalmente (horneada antes de este esquema, el `Name` real en AWS quedó como `CHEPITA-L4-g6xlarge-20260719` — de aquí en adelante los `Name` sí siguen el esquema `vX.Y.Z`). Incluye: Faster-Whisper Small, int8_float16, batch_size=24, word_timestamps, `TranscriptionProvider`, manejo de errores con DLQ. | Smoke test 1 archivo, 2761 palabras, 0 errores, justo antes de capturar el AMI. |
+| `v1.1.0` | `ami-0b3179b61a0f3c625` | 2026-07-22 | Fix critico: el `worker_prefetch.py` horneado en v1.0.0 no publicaba a `media-intel-transcription-done` (le faltaba el bloque `DONE_QUEUE_URL`/`send_message`, aunque el codigo ya existia en el repo desde antes) -- 5 de 6 instancias lanzadas desde v1.0.0 transcribian y subian a S3 correctamente pero sus resultados nunca llegaban a Postgres (quedaban `procesando` para siempre). Horneado con `--no-reboot` desde una instancia ya corriendo el `worker_prefetch.py` correcto, sin interrumpir el trabajo en curso. | Confirmado en uso real: throughput de ingesta subio de ~1-2 grabaciones/min a ~30+/min tras relanzar los workers de las 5 instancias con el script corregido. No se corrio un smoke test aislado nuevo -- la validacion fue la corrida de produccion misma. |
 
 **Para relanzar chepita cuando se necesite:**
 ```bash
-aws ec2 run-instances --image-id ami-098f304c0a5513eba --instance-type g6.xlarge \
+aws ec2 run-instances --image-id ami-0b3179b61a0f3c625 --instance-type g6.xlarge \
   --iam-instance-profile Name=<perfil-con-rol-media-intel-ec2-transcribe> \
   --security-group-ids <sg-de-media-intel-transcribe-sg> --subnet-id <subnet-us-east-1a> \
   --tag-specifications 'ResourceType=instance,Tags=[{Key=Project,Value=media-intel},{Key=Name,Value=media-intel-chepita-g6}]'
@@ -79,6 +81,8 @@ aws ssm get-command-invocation --command-id <id> --instance-id <nuevo-instance-i
   - Prefetch activo (un hilo adicional, `Queue(maxsize=1)`, sin descargas duplicadas, limpieza automática de temporales)
   - `word_timestamps=True` ← activado 2026-07-19, probado con smoke test (1 archivo, 2761 palabras, 0 errores). Cada corrida ahora sube dos archivos por estación: `<station>.txt` (legible, igual que antes) y `<station>_words.json` (lista plana `[{"index", "word", "start", "end"}, ...]`) — es el input que espera el siguiente paso del pipeline (segmentación narrativa por LLM, por índice de palabra, no por segundos — ver README de [gchiham/mvp-medios](https://github.com/gchiham/mvp-medios) y `docs/PRD.md`).
 - Se lanzan **6 workers persistentes** en paralelo (`WORKER_ID=w0`..`w5`), cada uno consumiendo la misma cola SQS — SQS reparte los mensajes automáticamente, sin coordinación extra.
+- **`DONE_QUEUE_URL` es obligatoria para que el resultado llegue a Postgres** (`https://sqs.us-east-1.amazonaws.com/050871635829/media-intel-transcription-done`) — sin ella el worker sigue transcribiendo y subiendo a S3 sin error visible, pero nadie se entera en la base de datos (ver historial de versiones, v1.1.0). Exportarla junto al resto de env vars antes de lanzar los 6 workers.
+- **No hay systemd unit ni arranque automático** — los workers no se levantan solos al bootear una instancia nueva, hay que lanzarlos a mano vía SSM cada vez (`WORKER_ID=w$i setsid nohup ... &` por cada uno). Pendiente si se quiere automatizar.
 - Python del entorno con las dependencias (torch/cuda/faster-whisper): `/opt/pytorch/bin/python3`.
 - La transcripción en sí ya no está inline en `worker.py` — se delega a `FasterWhisperProvider` (implementa `TranscriptionProvider`, ver [TRANSCRIPTION_ARCHITECTURE.md](TRANSCRIPTION_ARCHITECTURE.md)). El árbol `src/modules/transcription/` del repo se despliega **verbatim** (mismo código, misma estructura de paquete) a `/home/ubuntu/app/src/modules/transcription/...`, y `worker.py` hace `sys.path.insert(0, "/home/ubuntu/app")` antes de importar. Desplegado y validado 2026-07-19 (smoke test idéntico al de antes del refactor).
 - Scripts de utilidad ya presentes en la instancia: `enqueue_10h.py`, `enqueue_20h.py` (encolan un set fijo de archivos de prueba), `analyze.py` (parsea `gpu.csv`/`sys.csv` de una corrida de benchmark), `run_batch.sh` / `run_batch_prefetch.sh` (arma una corrida completa: purga cola, encola, lanza monitoreo GPU/CPU + 6 workers, espera, resume resultado).
