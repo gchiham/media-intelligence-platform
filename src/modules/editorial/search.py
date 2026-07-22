@@ -1,101 +1,78 @@
-"""iSearch: busqueda inteligente sobre noticias (GET /news/search). Dos
-etapas -- ver NoticiaRepository.buscar_candidatos para la primera (prefiltro
-barato en Postgres). Este modulo es la segunda: el LLM razona solo sobre los
-candidatos que ya pasaron el filtro (nunca sobre el universo completo), y
-explica por que cada uno es relevante -- tolera variantes, alias y errores
-ortograficos que el prefiltro por si solo no resuelve.
+"""Expansion de query para GET /news/search -- ver src/api/routers/editorial.py.
+Solo se llama cuando el ILIKE plano ya devolvio pocos resultados (ver
+_EXPAND_THRESHOLD alli), asi que la mayoria de busquedas nunca tocan esto.
+La llamada al LLM manda solo la query del usuario (nunca las noticias), asi
+que el costo no depende del tamaño del corpus.
 """
-import json
+import time
 
 from anthropic import Anthropic
 
-_TOOL_NAME = "return_search_results"
+_TOOL_NAME = "return_search_terms"
 
 _RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "results": {
+        "terminos": {
             "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string", "description": "id de la noticia, tal como se recibio"},
-                    "score": {
-                        "type": "integer",
-                        "description": "0-100, que tan relevante es esta noticia para la busqueda",
-                    },
-                    "why": {
-                        "type": "string",
-                        "description": "explicacion breve (menos de 20 palabras) en español, basada solo en el texto dado",
-                    },
-                },
-                "required": ["id", "score", "why"],
-                "additionalProperties": False,
-            },
+            "items": {"type": "string"},
+            "description": "hasta 8 variantes/alias/errores ortograficos/terminos institucionales relacionados",
         }
     },
-    "required": ["results"],
+    "required": ["terminos"],
     "additionalProperties": False,
 }
 
-_SYSTEM_PROMPT = """Sos el motor de busqueda de un dashboard de monitoreo de noticias de Honduras.
+_SYSTEM_PROMPT = """Ayudas a expandir busquedas de un dashboard de noticias de Honduras.
 
-Te dan una consulta de un usuario y una lista de noticias candidatas (ya \
-prefiltradas). Tu trabajo es decidir cuales son realmente relevantes para \
-esa consulta, incluso si el texto exacto de la consulta no aparece -- \
-reconoce personas por variantes/alias/apodos/errores ortograficos (ej. \
-"Juan Orlando" debe matchear "JOH", "Juan Orlando Hernandez", "el \
-expresidente"), e instituciones por sus dependencias/temas relacionados \
-(ej. "Secretaria de Seguridad" debe matchear noticias de Policia Nacional, \
-capturas, operativos, narcotrafico, el ministro de turno, etc., aunque \
-nunca diga "Secretaria de Seguridad" textualmente).
+Dado un termino de busqueda, devolve hasta 8 variantes cortas que ayuden a \
+encontrarlo en texto libre: apodos/alias conocidos, errores ortograficos \
+comunes, nombre completo si diste solo un apodo, y (si es una institucion) \
+las dependencias/temas mas directamente asociados a ella.
 
-Para cada noticia relevante (score >= 40) devolve un score 0-100 y una \
-explicacion breve. Basa la explicacion UNICAMENTE en el titulo/resumen que \
-se te dio -- nunca inventes datos, acusaciones o nombres que no esten ahi. \
-Si ninguna noticia es relevante, devolve una lista vacia."""
+Ejemplos:
+- "Juan Orlando" -> ["JOH", "Juan Orlando Hernandez", "Hernandez", "expresidente"]
+- "Secretaria de Seguridad" -> ["Policia Nacional", "Ministro de Seguridad", \
+"operativos policiales", "capturas", "narcotrafico"]
+
+Cada termino debe ser corto (1-3 palabras), util para un ILIKE '%termino%' \
+sobre texto -- no frases largas ni explicaciones."""
+
+_CACHE_TTL_SECONDS = 3600
+_cache: dict[str, tuple[float, list[str]]] = {}
+
+_RATE_WINDOW_SECONDS = 3600
+_RATE_MAX_PER_WINDOW = 60
+_call_timestamps: list[float] = []
 
 
-def rerank_candidatos(
-    query: str,
-    candidatos: list[dict],
-    api_key: str,
-    model: str,
-    min_score: int = 40,
-) -> list[dict]:
-    """candidatos: dicts con al menos id/titulo/resumen/medio_nombre/created_at.
-    Devuelve una lista de {id, score, why}, score>=min_score, orden desc."""
-    if not candidatos:
-        return []
+class RateLimitExceeded(Exception):
+    pass
 
-    items = [
-        {
-            "id": str(c["id"]),
-            "titulo": c["titulo"] or "",
-            "resumen": (c["resumen"] or "")[:400],
-            "medio": c.get("medio_nombre") or "",
-            "keywords": (c.get("metadatos_ia") or {}).get("keywords", [])[:8]
-            if isinstance(c.get("metadatos_ia"), dict)
-            else [],
-        }
-        for c in candidatos
-    ]
+
+def expandir_query(query: str, api_key: str, model: str) -> list[str]:
+    key = query.strip().lower()
+    cached = _cache.get(key)
+    now = time.time()
+    if cached and cached[0] > now - _CACHE_TTL_SECONDS:
+        return cached[1]
+
+    while _call_timestamps and _call_timestamps[0] < now - _RATE_WINDOW_SECONDS:
+        _call_timestamps.pop(0)
+    if len(_call_timestamps) >= _RATE_MAX_PER_WINDOW:
+        raise RateLimitExceeded()
+    _call_timestamps.append(now)
 
     client = Anthropic(api_key=api_key)
     response = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=256,
         system=_SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": f'Consulta: "{query}"\n\nNoticias candidatas:\n{json.dumps(items, ensure_ascii=False)}',
-            }
-        ],
+        messages=[{"role": "user", "content": query}],
         tools=[
             {
                 "name": _TOOL_NAME,
-                "description": "Devuelve las noticias relevantes con su score y explicacion.",
+                "description": "Devuelve los terminos de busqueda expandidos.",
                 "input_schema": _RESPONSE_SCHEMA,
                 "strict": True,
             }
@@ -103,15 +80,11 @@ def rerank_candidatos(
         tool_choice={"type": "tool", "name": _TOOL_NAME},
     )
 
-    results = []
+    terminos: list[str] = []
     for block in response.content:
         if block.type == "tool_use" and block.name == _TOOL_NAME:
-            results = block.input.get("results", [])
+            terminos = block.input.get("terminos", [])
             break
 
-    candidato_ids = {str(c["id"]) for c in candidatos}
-    filtrados = [
-        r for r in results if r.get("score", 0) >= min_score and r.get("id") in candidato_ids
-    ]
-    filtrados.sort(key=lambda r: r["score"], reverse=True)
-    return filtrados
+    _cache[key] = (now, terminos)
+    return terminos

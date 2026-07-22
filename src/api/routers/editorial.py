@@ -10,7 +10,6 @@ para esto: usa SELECT FOR UPDATE y bloquearia filas solo por listarlas.
 """
 import html
 import json
-import time
 import uuid
 from datetime import datetime
 
@@ -35,18 +34,10 @@ from src.api.schemas.editorial import (
 from src.infrastructure.config import settings
 from src.modules.editorial.models import Noticia
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
-from src.modules.editorial.search import rerank_candidatos
+from src.modules.editorial.search import RateLimitExceeded, expandir_query
 from src.modules.editorial.services import NoticiaService
 
 router = APIRouter(prefix="/news", tags=["news"])
-
-# Rate limit de iSearch (cada busqueda gasta una llamada real al LLM) --
-# proceso en memoria, un solo contador global porque el dashboard tiene un
-# unico token, no usuarios individuales. Suficiente para evitar una factura
-# sorpresa por un loop/bot, no para multi-tenant real.
-_SEARCH_WINDOW_SECONDS = 3600
-_SEARCH_MAX_PER_WINDOW = 60
-_search_timestamps: list[float] = []
 
 _ESTADO_COLORS = {
     "pendiente": "#9ca3af",
@@ -89,7 +80,6 @@ def _dashboard_row_html(row: dict, token: str) -> str:
       <summary>
         <span class="badge" style="background:{color}">{html.escape(estado)}</span>
         <span class="titulo">{titulo}</span>
-        <span class="why"></span>
         <span class="date">{created_str}</span>
       </summary>
       <div class="row-body">
@@ -168,16 +158,6 @@ _DASHBOARD_PAGE = """<!doctype html>
   .search button:hover {{ background: #4b5568; }}
   .search .clear {{ background: transparent; border: 1px solid #232b36; color: #9ca3af; display: none; }}
   .search-status {{ color: #6b7280; font-size: 0.78rem; margin: 8px 0 0; min-height: 1.1em; }}
-  .why {{
-    flex: none;
-    color: #7dd3a8;
-    font-size: 0.75rem;
-    font-style: italic;
-    max-width: 40%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }}
   .tabs {{
     position: sticky;
     top: 0;
@@ -277,7 +257,7 @@ _DASHBOARD_PAGE = """<!doctype html>
   <h1>Dashboard de Noticias</h1>
   <p class="subtitle">Generado {generated_at} &middot; <span class="count">{count} noticias</span> &middot; mas reciente primero &middot; click en una fila para ver resumen + transcripcion completa</p>
   <div class="search">
-    <input type="text" id="search-input" placeholder="iSearch: ej. Juan Orlando, Secretaria de Seguridad..." />
+    <input type="text" id="search-input" placeholder="Buscar por palabra clave..." />
     <button id="search-btn">Buscar</button>
     <button id="search-clear" class="clear">Limpiar</button>
   </div>
@@ -313,10 +293,6 @@ _DASHBOARD_PAGE = """<!doctype html>
         }});
       }});
 
-      function clearWhy() {{
-        rows.forEach(function(row) {{ row.querySelector('.why').textContent = ''; }});
-      }}
-
       function runSearch() {{
         var q = searchInput.value.trim();
         if (!q) return;
@@ -328,20 +304,15 @@ _DASHBOARD_PAGE = """<!doctype html>
             return r.json();
           }})
           .then(function(data) {{
-            clearWhy();
-            var byId = {{}};
-            data.results.forEach(function(r) {{ byId[r.id] = r; }});
+            var ids = {{}};
+            data.results.forEach(function(r) {{ ids[r.id] = true; }});
             rows.forEach(function(row) {{
-              var match = byId[row.getAttribute('data-id')];
-              row.classList.toggle('hidden', !match);
-              if (match) row.querySelector('.why').textContent = '\\ud83d\\udd0e ' + match.why;
+              row.classList.toggle('hidden', !ids[row.getAttribute('data-id')]);
             }});
-            data.results
-              .map(function(r) {{ return rowsContainer.querySelector('[data-id="' + r.id + '"]'); }})
-              .forEach(function(el) {{ if (el) rowsContainer.appendChild(el); }});
             tabsBar.style.display = 'none';
             searchClear.style.display = 'inline-block';
-            searchStatus.textContent = data.count + ' resultado(s) para "' + data.query + '"';
+            var suffix = data.expandido ? ' (busqueda ampliada con variantes/alias)' : '';
+            searchStatus.textContent = data.count + ' resultado(s) para "' + data.query + '"' + suffix;
           }})
           .catch(function(err) {{
             searchStatus.textContent = 'Error buscando: ' + err.message;
@@ -352,7 +323,6 @@ _DASHBOARD_PAGE = """<!doctype html>
       function clearSearch() {{
         searchInput.value = '';
         searchStatus.textContent = '';
-        clearWhy();
         originalOrder.forEach(function(el) {{ rowsContainer.appendChild(el); }});
         tabsBar.style.display = '';
         searchClear.style.display = 'none';
@@ -415,15 +385,20 @@ def news_dashboard(
     return HTMLResponse(content=page)
 
 
+_EXPAND_THRESHOLD = 3  # si el ILIKE plano ya trae esto o mas, no se llama al LLM
+
+
 @router.get(
     "/search",
     status_code=status.HTTP_200_OK,
-    summary="iSearch: busqueda inteligente de noticias",
+    summary="Busqueda de noticias por keywords, con expansion por LLM cuando hace falta",
     description=(
-        "Prefiltro barato en Postgres (ILIKE) para acotar candidatos, seguido de un "
-        "LLM que decide relevancia real y explica por que -- tolera variantes, alias y "
-        "errores ortograficos que el prefiltro solo no resolveria. Ver "
-        "src/modules/editorial/search.py. Protegida por `token`, con rate limit."
+        "Busqueda por texto (ILIKE) sobre titulo/resumen/transcripcion/keywords/medio. "
+        "Si el match directo trae pocos resultados, se llama a Claude UNA vez (solo con "
+        "la query, nunca con las noticias) para expandir a alias/variantes/errores "
+        "ortograficos/terminos institucionales relacionados, y se reintenta -- la "
+        "mayoria de busquedas comunes nunca llegan a esto. Cacheado por query (1h) y "
+        "con rate limit. Protegida por `token`."
     ),
 )
 def news_search(
@@ -438,31 +413,26 @@ def news_search(
     if not q:
         return {"query": q, "count": 0, "results": []}
 
-    now = time.time()
-    while _search_timestamps and _search_timestamps[0] < now - _SEARCH_WINDOW_SECONDS:
-        _search_timestamps.pop(0)
-    if len(_search_timestamps) >= _SEARCH_MAX_PER_WINDOW:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Limite de busquedas alcanzado, intenta de nuevo en un rato.",
-        )
-    _search_timestamps.append(now)
-
-    if not settings.anthropic_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="iSearch no esta configurado (falta ANTHROPIC_API_KEY).",
-        )
-
     terminos = [t for t in q.split() if len(t) >= 2][:8]
-    candidatos = noticias.buscar_candidatos(terminos)
-    results = rerank_candidatos(
-        query=q,
-        candidatos=candidatos,
-        api_key=settings.anthropic_api_key.get_secret_value(),
-        model=settings.anthropic_model,
-    )
-    return {"query": q, "count": len(results), "results": results}
+    candidatos = noticias.buscar_candidatos(terminos, limit=300)
+    expandido = False
+
+    if len(candidatos) < _EXPAND_THRESHOLD and settings.anthropic_api_key:
+        try:
+            extra_terminos = expandir_query(
+                q, settings.anthropic_api_key.get_secret_value(), settings.anthropic_model
+            )
+        except RateLimitExceeded:
+            extra_terminos = []
+        extra_terminos = [t for t in extra_terminos if t.lower() not in [x.lower() for x in terminos]]
+        if extra_terminos:
+            expandido = True
+            existentes = {c["id"] for c in candidatos}
+            extra_candidatos = noticias.buscar_candidatos(extra_terminos, limit=300)
+            candidatos += [c for c in extra_candidatos if c["id"] not in existentes]
+
+    results = [{"id": str(c["id"])} for c in candidatos]
+    return {"query": q, "count": len(results), "results": results, "expandido": expandido}
 
 
 @router.get(
