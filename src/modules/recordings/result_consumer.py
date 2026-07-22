@@ -53,6 +53,7 @@ class TranscriptionResultConsumer:
         queue_url: str,
         provider_name: str = "faster-whisper-small",
         max_messages: int = 10,
+        max_receives: int = 200,
     ):
         self._grabaciones = grabaciones
         self._transcripciones = transcripciones
@@ -61,55 +62,72 @@ class TranscriptionResultConsumer:
         self._queue_url = queue_url
         self._provider_name = provider_name
         self._max_messages = max_messages
+        # Tope duro de llamadas receive_message por corrida -- a max_messages=10
+        # esto es hasta 2000 mensajes por tick de cron, mas que suficiente para
+        # el volumen actual. Es una red de seguridad contra un loop infinito si
+        # SQS alguna vez devolviera mensajes sin llegar a vaciarse (no deberia
+        # pasar en uso normal), no un limite pensado para alcanzarse.
+        self._max_receives = max_receives
 
     def consume_once(self) -> ConsumeResult:
-        """Procesa los mensajes disponibles ahora mismo (una pasada, no un
-        loop infinito) -- pensado para correr como cron/script, no como
-        servicio persistente, mientras el volumen no lo justifique."""
+        """Drena todos los mensajes disponibles ahora mismo (loop de
+        recibos de a lo sumo `max_messages` -- tope duro de SQS por
+        llamada -- hasta que un recibo vuelve vacio), pensado para correr
+        como cron/script, no como servicio persistente, mientras el
+        volumen no lo justifique.
+
+        Antes esto hacia un solo receive_message y paraba ahi -- con
+        `max_messages=10` (tope de SQS) eso limitaba el ingest a 10
+        grabaciones por tick de cron sin importar cuantos workers de
+        chepita estuvieran produciendo resultados mas rapido."""
         procesados = 0
         omitidos = 0
         sin_id = 0
 
-        resp = self._sqs.receive_message(
-            QueueUrl=self._queue_url, MaxNumberOfMessages=self._max_messages, WaitTimeSeconds=5,
-        )
-        for msg in resp.get("Messages", []):
-            body = json.loads(msg["Body"])
-            grabacion_id = body.get("grabacion_id")
-            if not grabacion_id:
-                sin_id += 1
-                logger.error("mensaje sin grabacion_id, se descarta", extra={"extra_fields": {"body": body}})
-                self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-                continue
-
-            if self._transcripciones.get_by_grabacion_id(grabacion_id) is not None:
-                omitidos += 1
-                self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-                continue
-
-            words = _download_json(self._s3, body["words_json_s3_uri"])
-
-            grabacion = self._grabaciones.get_by_id(grabacion_id)
-            if grabacion is None:
-                logger.error(
-                    "grabacion_id del mensaje no existe en Postgres",
-                    extra={"extra_fields": {"grabacion_id": str(grabacion_id)}},
-                )
-                self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-                continue
-
-            transcripcion = Transcripcion(
-                grabacion_id=grabacion.id,
-                texto_completo=" ".join(w["word"] for w in words),
-                segmentos={"words": words},
-                proveedor=self._provider_name,
+        for _ in range(self._max_receives):
+            resp = self._sqs.receive_message(
+                QueueUrl=self._queue_url, MaxNumberOfMessages=self._max_messages, WaitTimeSeconds=5,
             )
-            self._transcripciones.add(transcripcion)
-            grabacion.estado = EstadoGrabacion.PROCESADA
-            self._grabaciones.commit()
+            messages = resp.get("Messages", [])
+            if not messages:
+                break
+            for msg in messages:
+                body = json.loads(msg["Body"])
+                grabacion_id = body.get("grabacion_id")
+                if not grabacion_id:
+                    sin_id += 1
+                    logger.error("mensaje sin grabacion_id, se descarta", extra={"extra_fields": {"body": body}})
+                    self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+                    continue
 
-            self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-            procesados += 1
+                if self._transcripciones.get_by_grabacion_id(grabacion_id) is not None:
+                    omitidos += 1
+                    self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+                    continue
+
+                words = _download_json(self._s3, body["words_json_s3_uri"])
+
+                grabacion = self._grabaciones.get_by_id(grabacion_id)
+                if grabacion is None:
+                    logger.error(
+                        "grabacion_id del mensaje no existe en Postgres",
+                        extra={"extra_fields": {"grabacion_id": str(grabacion_id)}},
+                    )
+                    self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+                    continue
+
+                transcripcion = Transcripcion(
+                    grabacion_id=grabacion.id,
+                    texto_completo=" ".join(w["word"] for w in words),
+                    segmentos={"words": words},
+                    proveedor=self._provider_name,
+                )
+                self._transcripciones.add(transcripcion)
+                grabacion.estado = EstadoGrabacion.PROCESADA
+                self._grabaciones.commit()
+
+                self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+                procesados += 1
 
         return ConsumeResult(procesados=procesados, omitidos_ya_existian=omitidos, sin_grabacion_id=sin_id)
 

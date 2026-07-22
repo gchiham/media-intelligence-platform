@@ -246,7 +246,10 @@ class TestTranscriptionResultConsumer:
             "grabacion_id": str(grabacion.id),
             "words_json_s3_uri": "s3://out-bucket/transcripts/station/2026-07-20T12Z_words.json",
         })
-        sqs.receive_message.return_value = {"Messages": [{"Body": message_body, "ReceiptHandle": receipt}]}
+        sqs.receive_message.side_effect = [
+            {"Messages": [{"Body": message_body, "ReceiptHandle": receipt}]},
+            {"Messages": []},
+        ]
 
         consumer = TranscriptionResultConsumer(
             grabaciones=GrabacionRepository(session),
@@ -284,7 +287,10 @@ class TestTranscriptionResultConsumer:
             "grabacion_id": str(grabacion.id),
             "words_json_s3_uri": "s3://out-bucket/x_words.json",
         })
-        sqs.receive_message.return_value = {"Messages": [{"Body": message_body, "ReceiptHandle": "rh-2"}]}
+        sqs.receive_message.side_effect = [
+            {"Messages": [{"Body": message_body, "ReceiptHandle": "rh-2"}]},
+            {"Messages": []},
+        ]
 
         consumer = TranscriptionResultConsumer(
             grabaciones=GrabacionRepository(session),
