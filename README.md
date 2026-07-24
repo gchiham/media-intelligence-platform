@@ -252,6 +252,7 @@ Detalle completo, IDs de recursos, proceso de versionado de AMI, e **incidentes 
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Cómo desplegar/actualizar producción, crontabs, logging. |
 | [`API.md`](docs/API.md) | Contrato completo de cada endpoint (request/response). |
 | [`OPTIMIZATION_REPORT.md`](docs/OPTIMIZATION_REPORT.md) | Benchmarks de transcripción (batch size, prefetch) que justifican la config actual. |
+| [`EFFICIENCY_REVIEW.md`](docs/EFFICIENCY_REVIEW.md) | **Propuestas de mejora priorizadas** (no implementadas): deduplicación entre emisoras, costo de LLM, calidad de transcripción, infra. |
 
 ## Estado actual y limitaciones conocidas
 
