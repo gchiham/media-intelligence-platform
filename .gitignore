@@ -16,3 +16,7 @@ logs/*/*
 !logs/*/.gitkeep
 
 postgres_backups/
+
+# Archivos de trabajo temporales de sesiones (dumps de DB, exports, scratch).
+# Nunca deben commitearse: pueden contener datos reales de produccion.
+scratchpad/

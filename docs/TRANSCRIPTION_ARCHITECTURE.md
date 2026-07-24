@@ -35,14 +35,19 @@ Los defaults del constructor **son** la configuración de producción validada:
 
 ```python
 FasterWhisperProvider(
-    model_name="small",
+    model_name="large-v3-turbo",  # cambiado desde "small" -- EFFICIENCY_REVIEW.md §5
     compute_type="int8_float16",
     batch_size=24,       # optimo validado en OPTIMIZATION_REPORT.md, Fase 1
     language="es",
     vad_filter=True,
     device="cuda",
+    hotwords=None,       # None => vocabulario hondureño de vocabulary.py
 )
 ```
+
+**Sobre `model_name`:** era `small` hasta 2026-07-22. El cambio a `large-v3-turbo` no busca velocidad sino **exactitud en nombres propios** — en monitoreo de medios, un nombre mal transcrito es una mención que el cliente nunca encuentra. turbo retiene >95% de la exactitud de large-v3 con ~1.6 GB de VRAM en int8 (la L4 tiene 23 GB). Ver `docs/EFFICIENCY_REVIEW.md` §5.
+
+**Sobre `hotwords`:** sesga el decoder hacia términos hondureños (ver [vocabulary.py](../src/modules/transcription/vocabulary.py)). La ventana de condicionamiento es de ~224 tokens, así que la lista es corta y curada a propósito — no es un volcado del catálogo `Entidad`. El provider detecta en `__init__` si la versión instalada de faster-whisper acepta el kwarg; si no, transcribe sin sesgo en vez de fallar.
 
 `word_timestamps=True` no es un parámetro configurable — es inherente al contrato (`TranscriptionResult.words` siempre existe), así que quedó fijo dentro de `transcribe()`.
 

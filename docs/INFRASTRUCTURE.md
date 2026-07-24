@@ -80,7 +80,7 @@ aws ssm get-command-invocation --command-id <id> --instance-id <nuevo-instance-i
 
 - `/home/ubuntu/worker.py` — **worker canónico de producción** (con prefetch integrado, ver [scripts/worker_prefetch.py](../scripts/worker_prefetch.py) en este repo para la versión versionada). Carga el modelo Whisper una sola vez, consume la cola SQS en loop, descarga el archivo N+1 en un hilo mientras transcribe N.
 - Config actual (defaults en el propio script, no requieren env vars):
-  - `WHISPER_MODEL=small`
+  - `WHISPER_MODEL=large-v3-turbo` ← cambiado 2026-07-22 (antes `small`), ver `docs/EFFICIENCY_REVIEW.md` §5. **Requiere hornear un AMI nuevo** (`v1.2.0`) con los pesos precargados: si no, el primer worker de cada instancia nueva los baja de HuggingFace (~1.6 GB) antes de empezar.
   - `WHISPER_COMPUTE_TYPE=int8_float16`
   - `WHISPER_BATCH_SIZE=24` ← recomendado tras Fase 1 de optimización
   - Prefetch activo (un hilo adicional, `Queue(maxsize=1)`, sin descargas duplicadas, limpieza automática de temporales)

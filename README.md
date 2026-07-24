@@ -121,6 +121,7 @@ erDiagram
     Grabacion ||--o| Transcripcion : produce
     Grabacion ||--o| PipelineRun : procesa
     Grabacion ||--o{ Noticia : contiene
+    Historia ||--o{ Noticia : "agrupa apariciones"
     Noticia ||--o{ NoticiaVersion : "versiones (inmutable)"
     NoticiaVersion }o--o| Tema : clasificada_en
     NoticiaVersion }o--o| Subtema : clasificada_en
@@ -140,7 +141,7 @@ erDiagram
 | `transcription` | `TranscriptionProvider`, `FasterWhisperProvider` | Abstracción del proveedor de transcripción (hoy Faster-Whisper en chepita). |
 | `pipeline` | `Noticia`, `NoticiaVersion`, `PipelineRun` | Orquesta segmentación + clipping; versiona cada noticia de forma inmutable. |
 | `ai` | `Tema`, `Subtema`, `Entidad`, `AIAnalysisProvider` | Catálogo editorial + puerto hacia el LLM (Claude primario, OpenAI respaldo). |
-| `editorial` | `ClienteNoticia`, `MonitoringProfile` | Curación por cliente: qué noticia va a qué `Tenant`, con qué sentimiento/prioridad. |
+| `editorial` | `Noticia`, `NoticiaVersion`, `Historia`, `ClienteNoticia`, `MonitoringProfile` | Flujo editorial y curación por cliente. `Historia` agrupa la misma noticia cubierta por varias emisoras (dedup semántico) — sin ella, un periodista cura el mismo evento hasta 8 veces. |
 | `auth` | `Tenant`, `Usuario`, `LoginEvent` | Multi-tenancy + roles (`super_admin`, `supervisor_editorial`, `periodista`, `admin_cliente`, `usuario_cliente`). |
 | `reports` | `InformeSemanal`, `InformeNoticia` | Informes agregados por cliente. |
 

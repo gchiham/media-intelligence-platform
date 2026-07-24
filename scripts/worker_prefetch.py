@@ -38,7 +38,10 @@ DLQ_URL = os.environ.get("DLQ_URL", QUEUE_URL + "-dlq")
 # despues de subir el resultado a S3. Ver docs/INGESTION_DESIGN.md.
 DONE_QUEUE_URL = os.environ.get("DONE_QUEUE_URL")
 WORKER_ID = os.environ.get("WORKER_ID", "w0")
-MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")
+# large-v3-turbo, no small -- ver docs/EFFICIENCY_REVIEW.md §5 (calidad de
+# nombres propios). Si una instancia arranca sin los pesos en cache, el primer
+# worker los descarga de HuggingFace (~1.6 GB) y los demas los reusan.
+MODEL_NAME = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 BATCH_SIZE = int(os.environ.get("WHISPER_BATCH_SIZE", "24"))
 COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8_float16")
 WORK_DIR = f"/home/ubuntu/worker_bench_{WORKER_ID}"

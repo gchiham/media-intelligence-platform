@@ -33,6 +33,56 @@ _TOOL_NAME = "return_news_segments"
 _CACHE_CONTROL = {"type": "ephemeral"}
 
 
+def build_request_params(chunk: list[Word], model: str) -> dict:
+    """Parametros de una llamada de segmentacion, sin ejecutarla.
+
+    Existe como funcion aparte porque hay DOS caminos que tienen que mandar
+    exactamente lo mismo: la llamada sincronica de `AnthropicAnalysisProvider`
+    (usada por POST /pipeline/process) y la Batch API (usada para el backlog,
+    ver src/modules/ai/batch.py). Si cada uno armara su propio request, el dia
+    que cambie el prompt o el schema quedarian silenciosamente desincronizados
+    y el backlog se segmentaria con reglas distintas al camino interactivo.
+    """
+    return {
+        "model": model,
+        # 4096 alcanzaba con el schema viejo (solo title/rango/confidence),
+        # pero un chunk denso en titulares (varias decenas de noticias
+        # cortas en 600 palabras, ej. un resumen de "titulares") puede
+        # superar 4096 tokens de salida con summary+keywords+entidades
+        # por item -- Claude corta el JSON a medias y la tool call
+        # queda invalida. Visto en produccion al ampliar el schema.
+        "max_tokens": 8192,
+        "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": _CACHE_CONTROL}],
+        "messages": [{"role": "user", "content": render_chunk(chunk)}],
+        "tools": [
+            {
+                "name": _TOOL_NAME,
+                "description": "Devuelve las noticias detectadas en el chunk.",
+                "input_schema": RESPONSE_SCHEMA,
+                "strict": True,
+                "cache_control": _CACHE_CONTROL,
+            }
+        ],
+        "tool_choice": {"type": "tool", "name": _TOOL_NAME},
+    }
+
+
+def parse_segments(raw: dict, lo: int, hi: int) -> list[NewsSegment]:
+    """Valida la respuesta cruda del LLM contra el rango de palabras que
+    realmente vio. Compartido entre el camino sincronico y el batch por la
+    misma razon que `build_request_params`."""
+    segments = []
+    for item in raw["news"]:
+        item["keywords"] = item.get("keywords", [])[:MAX_KEYWORDS]
+        seg = NewsSegment.model_validate(item)
+        # Descarta rangos que el modelo se haya inventado fuera del chunk
+        # que realmente vio, o invertidos.
+        if not (lo <= seg.start_word <= seg.end_word <= hi):
+            continue
+        segments.append(seg)
+    return segments
+
+
 class AnthropicAnalysisProvider(AIAnalysisProvider):
     def __init__(
         self,
@@ -66,43 +116,14 @@ class AnthropicAnalysisProvider(AIAnalysisProvider):
     def _segment_chunk(self, chunk: list[Word]) -> list[NewsSegment]:
         lo, hi = chunk[0].index, chunk[-1].index
         raw = self._call_with_retry(chunk)
-
-        segments = []
-        for item in raw["news"]:
-            item["keywords"] = item.get("keywords", [])[:MAX_KEYWORDS]
-            seg = NewsSegment.model_validate(item)
-            # Descarta rangos que el modelo se haya inventado fuera del chunk
-            # que realmente vio, o invertidos.
-            if not (lo <= seg.start_word <= seg.end_word <= hi):
-                continue
-            segments.append(seg)
-        return segments
+        return parse_segments(raw, lo, hi)
 
     def _call_with_retry(self, chunk: list[Word]) -> dict:
         last_error: TransientPipelineError | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 response = self._client.messages.create(
-                    model=self._model,
-                    # 4096 alcanzaba con el schema viejo (solo title/rango/confidence),
-                    # pero un chunk denso en titulares (varias decenas de noticias
-                    # cortas en 600 palabras, ej. un resumen de "titulares") puede
-                    # superar 4096 tokens de salida con summary+keywords+entidades
-                    # por item -- Claude corta el JSON a medias y la tool call
-                    # queda invalida. Visto en produccion al ampliar el schema.
-                    max_tokens=8192,
-                    system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": _CACHE_CONTROL}],
-                    messages=[{"role": "user", "content": render_chunk(chunk)}],
-                    tools=[
-                        {
-                            "name": _TOOL_NAME,
-                            "description": "Devuelve las noticias detectadas en el chunk.",
-                            "input_schema": RESPONSE_SCHEMA,
-                            "strict": True,
-                            "cache_control": _CACHE_CONTROL,
-                        }
-                    ],
-                    tool_choice={"type": "tool", "name": _TOOL_NAME},
+                    **build_request_params(chunk, self._model)
                 )
                 return self._extract_tool_input(response)
             except Exception as exc:

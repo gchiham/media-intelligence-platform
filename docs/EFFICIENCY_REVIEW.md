@@ -2,7 +2,9 @@
 
 Revisión de eficiencia del sistema completo — **2026-07-22**.
 
-Este documento es una **propuesta de mejoras priorizadas**, no un registro de trabajo hecho. Nada de lo que está aquí está implementado todavía. Cada punto incluye el dato real que lo motiva, para que se pueda discutir con evidencia en vez de opinión.
+Este documento nació como **propuesta priorizada**. Los puntos 1-5 de la tabla de §7 **ya están implementados** (2026-07-22); los puntos 6-8 siguen pendientes. Cada punto incluye el dato real que lo motiva, para que se pueda discutir con evidencia en vez de opinión.
+
+> **Estado de implementación — leer antes de actuar.** El código está escrito, probado (22 tests nuevos) y desplegable, pero **todavía no se corrió sobre el backlog de producción**. Los umbrales de deduplicación y de detección de publicidad son valores de partida documentados, **no calibrados con datos de estas 15 emisoras**. Ver "Qué falta antes de correrlo en producción" al final de §7.
 
 Los datos de la sección 1 se midieron directamente contra la base de datos de producción (`media-intel-mvp-backend`) el 2026-07-22. Todo lo que sea **cálculo derivado** o **estimación** está marcado como tal.
 
@@ -171,16 +173,49 @@ Hoy corre **Whisper Small**. Para monitoreo de medios esto importa más de lo qu
 
 ## 7. Priorización propuesta
 
-| # | Acción | Impacto | Esfuerzo | Depende de |
-|---|---|---|---|---|
-| 1 | **Batch API** antes de correr el backlog de ~91k llamadas | 50% del costo LLM | Bajo | — |
-| 2 | **Deduplicación semántica** entre emisoras (entidad `Historia`) | 5-8x menos trabajo editorial + feature vendible | Medio | Decisiones de diseño (§2) |
-| 3 | `small` → **`large-v3-turbo`** + vocabulario hondureño | Calidad de nombres propios = calidad del producto | Bajo | Hornear AMI nuevo |
-| 4 | **Saltar publicidad/música** (fingerprint) | ~50% menos GPU y LLM | Medio | — |
-| 5 | **Resolución de entidades** al catálogo `Entidad` | Habilita tracking real de menciones | Medio | — |
-| 6 | **Spot** para chepita | 60-90% del costo GPU | Bajo | Fase 4 ya diseñada |
-| 7 | **Solape en chunking** | Deja de partir noticias a la mitad | Bajo | — |
-| 8 | Sacar **Postgres del `t3.small`** | Estabilidad (ya falló una vez) | Medio | — |
+| # | Acción | Impacto | Estado |
+|---|---|---|---|
+| 1 | **Batch API** antes de correr el backlog de ~91k llamadas | 50% del costo LLM | ✅ implementado |
+| 2 | **Deduplicación semántica** entre emisoras (entidad `Historia`) | 5-8x menos trabajo editorial + feature vendible | ✅ implementado |
+| 3 | `small` → **`large-v3-turbo`** + vocabulario hondureño | Calidad de nombres propios = calidad del producto | ✅ código listo, falta hornear AMI |
+| 4 | **Saltar publicidad repetida** | ~50% menos llamadas al LLM | ✅ implementado (por texto, no audio) |
+| 5 | **Resolución de entidades** al catálogo `Entidad` | Habilita tracking real de menciones | ✅ implementado |
+| 6 | **Spot** para chepita | 60-90% del costo GPU | ⬜ pendiente |
+| 7 | **Solape en chunking** | Deja de partir noticias a la mitad | ⬜ pendiente |
+| 8 | Sacar **Postgres del `t3.small`** | Estabilidad (ya falló una vez) | ⬜ pendiente |
+
+### Qué se construyó (puntos 1-5)
+
+| Pieza | Archivo |
+|---|---|
+| Batch API (armado, envío, recolección) | [`src/modules/ai/batch.py`](../src/modules/ai/batch.py) |
+| Provider que consume segmentos ya calculados | [`src/modules/ai/providers/precomputed_provider.py`](../src/modules/ai/providers/precomputed_provider.py) |
+| Detección de publicidad repetida | [`src/modules/ai/repeated_content.py`](../src/modules/ai/repeated_content.py) |
+| Resolución de entidades | [`src/modules/ai/entity_resolution.py`](../src/modules/ai/entity_resolution.py) |
+| Embeddings (puerto + adaptador OpenAI) | [`src/modules/ai/embeddings.py`](../src/modules/ai/embeddings.py) |
+| Agrupamiento en `Historia` | [`src/modules/editorial/dedup.py`](../src/modules/editorial/dedup.py) |
+| Vocabulario hondureño para Whisper | [`src/modules/transcription/vocabulary.py`](../src/modules/transcription/vocabulary.py) |
+| Migración (4 tablas + columnas) | `alembic/versions/b8e4f21a7c30_*.py` |
+| Tests (22) | [`tests/test_efficiency_features.py`](../tests/test_efficiency_features.py) |
+
+Scripts operativos, en el orden en que conviene correrlos:
+
+```bash
+python scripts/learn_repeated_content.py --limit 2000   # 1. indexa qué se repite
+python scripts/segment_backlog_batch.py --submit --limit 200
+python scripts/segment_backlog_batch.py --status        # 2. esperar (hasta 24h)
+python scripts/segment_backlog_batch.py --collect
+python scripts/resolve_entities.py                      # 3. tras generar Noticias
+python scripts/cluster_historias.py --dry-run           # 4. calibrar antes de escribir
+```
+
+### Qué falta antes de correrlo en producción
+
+1. **Calibrar el umbral de deduplicación.** El default (0.83) es un punto de partida, no un valor medido con estas emisoras. `HistoriaClusterer.calibrar()` recibe pares etiquetados a mano y reporta falsos positivos/negativos por umbral. Correr `cluster_historias.py --dry-run` primero. El error caro es el falso positivo: fusionar dos noticias distintas es silencioso.
+2. **Validar el umbral de publicidad** (5 apariciones). Revisar a mano una muestra de `contenido_repetido` con `veces_visto >= 5` antes de confiar en el filtro. La columna `es_publicidad` existe para corregir a mano sin tocar código.
+3. **Hornear AMI `v1.2.0`** con los pesos de `large-v3-turbo` precargados. Sin eso funciona igual, pero cada instancia nueva baja ~1.6 GB de HuggingFace en el primer arranque.
+4. **Medir turbo vs small con el rigor del `OPTIMIZATION_REPORT.md`** (una variable, mismo set de archivos) antes de darlo por bueno. La ganancia de calidad es esperable por los benchmarks públicos, no medida sobre audio hondureño.
+5. **Evaluar Haiku vs Sonnet** para segmentación (§4) — no se cambió el modelo, sigue `claude-sonnet-5`.
 
 **1, 3, 6 y 7 son cambios chicos y bastante independientes** — se pueden hacer de inmediato.
 

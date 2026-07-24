@@ -63,6 +63,12 @@ class Noticia(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     asignado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     motivo_rechazo: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # NULL = todavia no agrupada (o unica). Ver Historia arriba: agrupa esta
+    # aparicion con las de otras emisoras que cubrieron el mismo evento.
+    historia_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("historias.id"), nullable=True, index=True
+    )
+
 
 class NoticiaVersion(Base, UUIDPrimaryKeyMixin):
     """Inmutable. Cada edicion -- incluso post-publicacion -- inserta una fila nueva. RN-003/FR-071."""
@@ -107,6 +113,44 @@ class NoticiaVersionEntidad(Base):
         ForeignKey("noticia_versiones.id"), primary_key=True
     )
     entidad_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("entidades.id"), primary_key=True)
+
+
+class Historia(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Un evento noticioso real, agrupando todas sus apariciones al aire.
+
+    **Es la respuesta al hallazgo principal de docs/EFFICIENCY_REVIEW.md §2:**
+    monitoreando 15 emisoras de un pais chico, la misma noticia nacional sale
+    en todas. Medido sobre apenas 145 grabaciones ya procesadas, un mismo
+    evento aparecia hasta 8 veces -- y con titulos distintos, porque el LLM
+    titula cada emision por separado ("298 alcaldes recibiran kit de
+    maquinaria" vs "Entrega de maquinaria a alcaldes"). Sin esta agrupacion,
+    un periodista cura 8 veces la misma historia.
+
+    Por eso el agrupamiento es **semantico** (embedding + similitud coseno) y
+    no por titulo exacto: el titulo exacto no captura esos casos, que son
+    justamente los mas comunes.
+
+    Doble proposito -- no es solo ahorro de trabajo interno: "¿que emisoras
+    cubrieron esto, cuantas veces, a que hora?" es el reporte central que
+    pide un cliente de monitoreo, y sin `Historia` no hay a que colgarselo.
+    """
+
+    __tablename__ = "historias"
+
+    titulo_canonico: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Centroide de los embeddings de sus apariciones. Se guarda como JSONB en
+    # vez de pgvector porque la imagen postgres:17 no trae la extension y la
+    # comparacion siempre es contra una ventana chica (las historias abiertas
+    # de las ultimas N horas, decenas o cientos de filas), no contra todo el
+    # historico -- a esa escala el coseno en Python es de sobra y evita una
+    # dependencia de infraestructura. Migrar a pgvector si la ventana crece.
+    embedding: Mapped[list] = mapped_column(JSONB, nullable=False)
+    primera_aparicion: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ultima_aparicion: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    total_apariciones: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    medios_distintos: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
 class Sentimiento(str, enum.Enum):

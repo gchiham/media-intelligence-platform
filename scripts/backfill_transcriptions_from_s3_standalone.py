@@ -19,7 +19,6 @@ Uso:
 """
 import json
 import os
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
