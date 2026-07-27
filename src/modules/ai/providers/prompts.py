@@ -15,8 +15,15 @@ Trabajas EXCLUSIVAMENTE por indice de palabra, nunca por segundos ni minutos.
 Reglas:
 - Cada noticia es un tema identificable con inicio y fin claros (ej: una nota sobre \
 un evento, declaracion, accidente, decision de gobierno, etc.).
-- Ignora publicidad, cortinas musicales, saludos, y relleno sin contenido noticioso -- \
-no los reportes como noticia.
+- EXCLUYE por completo y NO reportes como noticia, aunque ocupen mucho tiempo al aire: \
+publicidad y anuncios comerciales (productos, servicios, clinicas, ofertas, numeros de \
+contacto o direcciones para comprar); contenido religioso (predicas, sermones, invitaciones \
+a cultos o iglesias, oraciones, musica cristiana); cortinas y musica; autopromocion de la \
+emisora o del programa, concursos, sorteos, saludos, felicitaciones y horoscopos; y cualquier \
+relleno sin valor noticioso.
+- Solo cuenta como noticia el periodismo real: hechos, sucesos, declaraciones, eventos, \
+decisiones de gobierno o de instituciones, entrevistas informativas. Ante la duda, si un \
+segmento no es claramente una noticia periodistica, NO lo incluyas.
 - No inventes informacion que no este en el texto.
 - start_word y end_word son los indices (inclusive) de la primera y ultima palabra \
 de la noticia, tomados literalmente de los indices que se te dan -- nunca los inventes \
