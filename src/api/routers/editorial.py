@@ -11,7 +11,7 @@ para esto: usa SELECT FOR UPDATE y bloquearia filas solo por listarlas.
 import html
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import boto3
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -39,6 +39,12 @@ from src.modules.editorial.services import NoticiaService
 
 router = APIRouter(prefix="/news", tags=["news"])
 
+# El dashboard muestra las horas en horario de Honduras (America/Tegucigalpa),
+# no en UTC. Honduras es UTC-6 sin horario de verano, asi que un offset fijo
+# alcanza y evita depender de tzdata en la imagen. Los timestamps en Postgres
+# son timezone-aware (UTC); se convierten a esta zona solo para mostrar.
+GMT6 = timezone(timedelta(hours=-6))
+
 _ESTADO_COLORS = {
     "pendiente": "#9ca3af",
     "en_revision": "#f59e0b",
@@ -57,7 +63,7 @@ def _dashboard_row_html(row: dict) -> str:
     estado = row["estado"] or ""
     color = _ESTADO_COLORS.get(estado, "#9ca3af")
     created = row["created_at"]
-    created_str = created.strftime("%Y-%m-%d %H:%M:%S") if created else "-"
+    created_str = created.astimezone(GMT6).strftime("%Y-%m-%d %H:%M:%S") if created else "-"
 
     return f"""
     <details class="row" data-id="{row["id"]}" data-medio="{html.escape(row["medio_nombre"] or "-")}">
@@ -268,7 +274,7 @@ _DASHBOARD_PAGE = """<!doctype html>
 </head>
 <body>
   <h1>Dashboard de Noticias</h1>
-  <p class="subtitle">Generado {generated_at} &middot; <span class="count">{count} noticias</span> &middot; mas reciente primero &middot; click en una fila para ver resumen + transcripcion completa</p>
+  <p class="subtitle">Generado {generated_at} (GMT-6) &middot; <span class="count">{count} noticias</span> &middot; horas en GMT-6 &middot; mas reciente primero &middot; click en una fila para ver resumen + transcripcion completa</p>
   <div class="search">
     <input type="text" id="search-input" placeholder="Buscar por palabra clave..." />
     <button id="search-btn">Buscar</button>
@@ -408,7 +414,7 @@ def news_dashboard(
     rows = noticias.listar_todas_resumen()
     cards = "\n".join(_dashboard_row_html(row) for row in rows)
     page = _DASHBOARD_PAGE.format(
-        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        generated_at=datetime.now(GMT6).strftime("%Y-%m-%d %H:%M:%S"),
         count=len(rows),
         tabs=_dashboard_tabs_html(rows),
         cards=cards,
