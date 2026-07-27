@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from src.application.orchestrator import MediaProcessingOrchestrator
 from src.infrastructure.config import settings
 from src.infrastructure.db.engine import get_engine
-from src.modules.ai.providers.anthropic_provider import AnthropicAnalysisProvider
+from src.modules.ai.providers.openai_provider import OpenAIAnalysisProvider
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
 from src.modules.editorial.services import NoticiaService
 from src.modules.pipeline.repositories import PipelineRunRepository
@@ -93,14 +93,18 @@ def get_clip_storage() -> ClipStorage:
 
 
 def get_pipeline_run_service(session: Session = Depends(get_db_session)) -> PipelineRunService:
-    # Sin fallback a otro modelo a proposito -- se prefiere que el
-    # PipelineRun quede en ERROR (AnthropicAnalysisProvider ya reintenta 3
-    # veces con backoff antes de rendirse) a degradar la calidad de
-    # extraccion cayendo a un modelo mas chico.
+    # OpenAI como proveedor primario de segmentacion (2026-07-27): la cuenta de
+    # Anthropic se quedo sin creditos, asi que el pipeline corre sobre OpenAI
+    # (settings.openai_model). Sin fallback a Anthropic a proposito mientras
+    # Claude no tenga creditos -- se prefiere que el PipelineRun quede en ERROR
+    # (OpenAIAnalysisProvider ya reintenta 3 veces con backoff antes de
+    # rendirse) a caer a un proveedor que va a fallar igual por falta de
+    # creditos. Para volver a Claude, revertir este proveedor cuando la cuenta
+    # tenga creditos de nuevo.
     orchestrator = MediaProcessingOrchestrator(
-        ai_provider=AnthropicAnalysisProvider(
-            api_key=settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else "",
-            model=settings.anthropic_model,
+        ai_provider=OpenAIAnalysisProvider(
+            api_key=settings.openai_api_key.get_secret_value() if settings.openai_api_key else "",
+            model=settings.openai_model,
         )
     )
     return PipelineRunService(
