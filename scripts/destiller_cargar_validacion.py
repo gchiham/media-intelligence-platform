@@ -27,6 +27,7 @@ from src.infrastructure.config import settings  # noqa: E402
 from src.infrastructure.db import registry  # noqa: F401,E402
 from src.infrastructure.db.engine import get_engine  # noqa: E402
 from src.modules.destiller.models import BloqueValidacion  # noqa: E402
+from src.modules.destiller.politica import CATALOGO  # noqa: E402
 from src.modules.destiller.prioridad import clasificar, mapa_por_palabra  # noqa: E402
 
 SALIDA = Path("data/destiller_eval")
@@ -34,12 +35,36 @@ PREFIJO_AUDIO = "destiller_eval/audio"
 PREFIJO_DESTILADO = "destiller_eval/destilado"
 
 NOMBRE_PRIORIDAD = {
+    0: "ESTRATO DE CONSENSO (FPR)",
     1: "binario, mayoria discrepa",
     2: "binario, frontera",
     3: "muestra de control",
     4: "subtipo distinto",
     5: "acuerdo exacto",
 }
+
+#: Bloques donde TODOS los modelos coinciden en que es excluible bajo la
+#: politica vigente. Va primero en la cola y se valida COMPLETO, no por muestra:
+#: existe para responder una sola pregunta -- cual es el FPR real del consenso,
+#: o sea que porcentaje de lo que la regla borraria era en realidad periodismo.
+#: Es el unico numero que falta para poder conectar Destiller a produccion.
+P_ESTRATO_CONSENSO = 0
+
+
+def bloques_crudos(s3, etiqueta: str) -> dict[str, list[dict]]:
+    """Los bloques tal cual estan en S3, para evaluarles la politica encima."""
+    salida: dict[str, list[dict]] = {}
+    for pagina in s3.get_paginator("list_objects_v2").paginate(
+        Bucket=settings.transcribe_output_bucket, Prefix=f"{PREFIJO_DESTILADO}/{etiqueta}/"
+    ):
+        for obj in pagina.get("Contents", []):
+            d = json.loads(
+                s3.get_object(Bucket=settings.transcribe_output_bucket, Key=obj["Key"])[
+                    "Body"
+                ].read()
+            )
+            salida[d["id"]] = d["bloques"]
+    return salida
 
 
 def bloques_comparados(s3, etiqueta: str) -> dict[str, dict[int, str]]:
@@ -141,6 +166,45 @@ def reporte(filas: list[dict], comparado: str | None) -> None:
         print(f"  {grab:34}{len(fs):>5} bloques{alta:>6.0f}% en P1+P2")
 
 
+def reporte_estrato(filas: list[dict], politica, modelos: list[str]) -> None:
+    """El estrato existe para responder una sola pregunta, y el reporte deja
+    escrito el criterio con el que se va a leer la respuesta."""
+    estrato = [f for f in filas if f["prioridad"] == P_ESTRATO_CONSENSO]
+    n = len(estrato)
+    print(f"\n{'=' * 74}\nESTRATO DE CONSENSO -- medicion de FPR\n{'=' * 74}")
+    print(f"  politica          : {politica.nombre} ({politica.motivo})")
+    print(f"  modelos en acuerdo: {politica.minimo_modelos} de "
+          f"{len(modelos) + 1} ({', '.join([filas[0]['modelo_base']] + modelos)})")
+    print(f"  categorias        : {', '.join(sorted(t.value for t in politica.tipos))}")
+    print(f"\n  bloques en el estrato : {n}  ({100 * n / len(filas):.1f}% del set)")
+    print(f"  tiempo estimado       : {_hhmm(n * SEG_POR_BLOQUE)} "
+          f"(a {SEG_POR_BLOQUE}s por bloque)")
+    print(f"  palabras              : "
+          f"{sum(f['end_word'] - f['start_word'] + 1 for f in estrato)}")
+    if estrato:
+        print(f"  por categoria         : " + "  ".join(
+            f"{k}={v}" for k, v in Counter(f["tipo_llm"] for f in estrato).most_common()))
+
+    print("\n  OBJETIVO ESTADISTICO")
+    print("    Se valida el estrato COMPLETO, no una muestra. Con validacion")
+    print("    completa el FPR no se estima: se cuenta. Si ademas sale cero, la")
+    print("    cota superior al 95% por la regla de tres es 3/n:")
+    for k in (30, 60, 100, 194, n):
+        if k:
+            print(f"      n={k:4}  ->  FPR < {300 / k:.1f}%")
+    print("\n  FPR ESPERADO")
+    print("    Desconocido, y ese es exactamente el punto. La hipotesis a")
+    print("    refutar es que el consenso de 3 modelos casi nunca marca")
+    print("    periodismo como excluible. Nadie lo ha medido todavia.")
+    print("\n  CRITERIO DE APTITUD PARA PRODUCCION")
+    print("    APTA        FPR <= 0.5% del aire del estrato: conectar la politica.")
+    print("    REVISAR     0.5% < FPR <= 2%: conectar solo `minima` (publicidad")
+    print("                y musica, sin promo) y remedir.")
+    print("    NO APTA     FPR > 2%: no conectar ninguna exclusion automatica.")
+    print("    El corte es en palabras perdidas, no en bloques: perder una nota")
+    print("    de 300 palabras no es lo mismo que perder una muletilla de 8.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--etiqueta", required=True, help="ej. qwen2-5-7b-instruct")
@@ -161,6 +225,21 @@ def main() -> None:
         default="v1",
         help="etiqueta de trazabilidad de esta comparacion",
     )
+    parser.add_argument(
+        "--estrato-consenso",
+        nargs="*",
+        default=[],
+        metavar="ETIQUETA",
+        help="etiquetas de los OTROS modelos con los que medir unanimidad. Los "
+        "bloques que todos coinciden en marcar excluible van a prioridad 0 y se "
+        "validan completos, para medir el FPR del consenso.",
+    )
+    parser.add_argument(
+        "--politica",
+        default="conservadora-v1",
+        choices=sorted(CATALOGO),
+        help="que categorias cuentan como excluibles al armar el estrato",
+    )
     args = parser.parse_args()
 
     s3 = boto3.client("s3", region_name=settings.aws_region)
@@ -180,6 +259,12 @@ def main() -> None:
     if args.comparar_con and not comparado:
         raise SystemExit(f"no hay destilados de '{args.comparar_con}' en S3")
 
+    politica = CATALOGO[args.politica]
+    # Mapa {grabacion: [bloques crudos]} de cada modelo del estrato. La politica
+    # se evalua sobre el JSON guardado, sin volver a correr ningun modelo.
+    estrato_modelos = {e: bloques_crudos(s3, e) for e in args.estrato_consenso}
+    tipos_excluibles = {t.value for t in politica.tipos}
+
     filas = []
     for g in bundle["grabaciones"]:
         clave = (
@@ -190,12 +275,26 @@ def main() -> None:
         if clave:
             print(f"  audio {g['id']} -> s3://{settings.clips_bucket}/{clave}")
         otro = comparado.get(g["id"], {})
+        # Rangos que la politica excluiria en esta grabacion, contando el
+        # modelo base mas los del estrato.
+        rangos_consenso = (
+            politica.rangos([g["bloques"]] + [estrato_modelos[e].get(g["id"], [])
+                                              for e in args.estrato_consenso])
+            if args.estrato_consenso
+            else []
+        )
         for i, b in enumerate(g["bloques"]):
             prioridad, desacuerdo, acuerdo = (
                 clasificar(b["tipo"], b["start_word"], b["end_word"], otro, g["id"], i)
                 if comparado
                 else (5, 0.0, 0.0)
             )
+            # El estrato manda sobre cualquier otra prioridad: es lo unico que
+            # falta medir para poder conectar Destiller.
+            if b["tipo"] in tipos_excluibles and any(
+                lo <= b["start_word"] and b["end_word"] <= hi for lo, hi in rangos_consenso
+            ):
+                prioridad = P_ESTRATO_CONSENSO
             filas.append(
                 {
                     "prioridad": prioridad,

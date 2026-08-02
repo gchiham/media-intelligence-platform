@@ -16,6 +16,7 @@ from src.modules.ai.destiller import (
     DestilledAnalysisProvider,
     TipoBloque,
     exclusiones,
+    exclusiones_por_consenso,
     filtrar_words,
     normalizar_particion,
 )
@@ -113,6 +114,57 @@ class TestExclusiones:
         # la llamada al LLM de segmentacion.
         bloques = [_bloque(0, 9, TipoBloque.DESCONOCIDO, 1.0)]
         assert exclusiones(bloques, 0.0) == []
+
+    def test_religioso_y_relleno_se_clasifican_pero_no_se_excluyen(self):
+        # Clasificar y actuar son cosas distintas: siguen etiquetados (sirven
+        # para reportes) pero no salen del camino de la segmentacion.
+        bloques = [
+            _bloque(0, 9, TipoBloque.RELIGIOSO, 1.0),
+            _bloque(10, 19, TipoBloque.RELLENO, 1.0),
+        ]
+        assert all(b.es_basura() for b in bloques)
+        assert exclusiones(bloques, 0.0) == []
+
+    def test_promo_no_se_excluye_con_un_solo_modelo(self):
+        # Ahi caen las aperturas de programa; sin acuerdo entre modelos no hay
+        # como distinguir autopromocion del arranque de una nota.
+        assert exclusiones([_bloque(0, 9, TipoBloque.PROMO, 0.99)], 0.0) == []
+
+
+class TestExclusionesPorConsenso:
+    def test_requiere_el_minimo_de_votos(self):
+        a = [_bloque(0, 9, TipoBloque.PROMO), _bloque(10, 19, TipoBloque.PUBLICIDAD)]
+        b = [_bloque(0, 9, TipoBloque.PROMO), _bloque(10, 19, TipoBloque.NOTICIA)]
+
+        assert exclusiones_por_consenso([a, b], minimo=2) == [(0, 9)]
+
+    def test_une_rangos_contiguos_de_modelos_distintos(self):
+        # Cada modelo corta donde quiere: el consenso se expresa sobre palabras
+        # y despues se vuelve a unir en rangos continuos.
+        a = [_bloque(0, 4, TipoBloque.PUBLICIDAD), _bloque(5, 9, TipoBloque.PUBLICIDAD)]
+        b = [_bloque(0, 9, TipoBloque.MUSICA)]
+
+        assert exclusiones_por_consenso([a, b], minimo=2) == [(0, 9)]
+
+    def test_deja_hueco_donde_no_hay_consenso(self):
+        a = [_bloque(0, 9, TipoBloque.PUBLICIDAD), _bloque(20, 29, TipoBloque.PUBLICIDAD)]
+        b = [_bloque(0, 9, TipoBloque.PUBLICIDAD), _bloque(20, 29, TipoBloque.NOTICIA)]
+
+        assert exclusiones_por_consenso([a, b], minimo=2) == [(0, 9)]
+
+    def test_unanimidad_es_mas_estricta_que_mayoria(self):
+        a = [_bloque(0, 9, TipoBloque.PUBLICIDAD)]
+        b = [_bloque(0, 9, TipoBloque.PUBLICIDAD)]
+        c = [_bloque(0, 9, TipoBloque.NOTICIA)]
+
+        assert exclusiones_por_consenso([a, b, c], minimo=2) == [(0, 9)]
+        assert exclusiones_por_consenso([a, b, c], minimo=3) == []
+
+    def test_religioso_y_relleno_tampoco_por_consenso(self):
+        a = [_bloque(0, 9, TipoBloque.RELLENO)]
+        b = [_bloque(0, 9, TipoBloque.RELIGIOSO)]
+
+        assert exclusiones_por_consenso([a, b], minimo=1) == []
 
 
 class TestFiltrarWords:

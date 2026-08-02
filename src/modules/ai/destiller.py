@@ -22,8 +22,10 @@ exclusiones.
 """
 import enum
 import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -58,6 +60,7 @@ class TipoBloque(str, enum.Enum):
 
 #: Todo lo que no es periodismo real. `DESCONOCIDO` queda fuera a proposito:
 #: ante un hueco del modelo, la opcion segura es NO excluir.
+#: Esto es CLASIFICACION: lo que el modelo reporta. No es lo que se excluye.
 TIPOS_BASURA = frozenset(
     {
         TipoBloque.PUBLICIDAD,
@@ -66,6 +69,39 @@ TIPOS_BASURA = frozenset(
         TipoBloque.MUSICA,
         TipoBloque.RELLENO,
     }
+)
+
+#: Lo que Destiller efectivamente saca del camino de la segmentacion. Es un
+#: subconjunto de TIPOS_BASURA a proposito: clasificar y actuar son cosas
+#: distintas. Seguir etiquetando `religioso` y `relleno` cuesta cero y sirve
+#: para reportes y para el set de evaluacion; excluirlos es lo que se decidio
+#: no hacer.
+#:
+#: Por que quedaron afuera, medido sobre 20 grabaciones y 3 modelos:
+#: - `relleno`: los tres modelos NUNCA coinciden en el (0.0% del aire en
+#:   unanimidad) y es la categoria mas disputada que existe -- gpt-4o-mini la
+#:   usa para el 12.6% del aire, Qwen para el 1.3%. Excluirla era el mayor
+#:   riesgo de perder periodismo y no aportaba nada.
+#: - `religioso`: 2.0% del aire en unanimidad. Se cede a proposito: una prédica
+#:   no es noticia, pero la postura de una iglesia sobre un tema publico si, y
+#:   la etiqueta no distingue una de otra.
+TIPOS_EXCLUIBLES = frozenset(
+    {TipoBloque.PUBLICIDAD, TipoBloque.MUSICA, TipoBloque.PROMO}
+)
+
+#: `promo` necesita mas evidencia que las otras dos. Publicidad y musica son
+#: inequivocas (los tres modelos coinciden en ellas mas que en nada); `promo`
+#: es donde caen las aperturas de programa -- "buenas tardes amigos,
+#: continuamos con el noticiero" -- que discuten si son autopromocion o el
+#: arranque de la nota.
+#:
+#: **No se puede pedir "promo con alta confianza" usando la confianza que
+#: declara el modelo.** Medido: en los bloques que Qwen marca `promo`, su
+#: confianza es 0.898 cuando los otros dos coinciden y 0.885 cuando discrepan.
+#: No separa nada. La unica evidencia que discrimina es el acuerdo entre
+#: modelos -- ver `exclusiones_por_consenso`.
+TIPOS_EXCLUIBLES_SIN_CONSENSO = frozenset(
+    {TipoBloque.PUBLICIDAD, TipoBloque.MUSICA}
 )
 
 
@@ -198,22 +234,101 @@ def normalizar_particion(
     return salida
 
 
-def exclusiones(bloques: list[BloqueDestilado], umbral: float) -> list[BloqueDestilado]:
-    """Bloques de basura con confianza suficiente como para excluirlos.
+def exclusiones(
+    bloques: list[BloqueDestilado],
+    umbral: float,
+    tipos: frozenset[TipoBloque] = TIPOS_EXCLUIBLES_SIN_CONSENSO,
+) -> list[BloqueDestilado]:
+    """Que sacar del camino cuando hay UN solo modelo.
 
-    El umbral no tiene un valor por defecto correcto conocido -- sale de la
-    validacion humana (scripts/destiller_calibrate.py), no de una intuicion.
+    Por defecto solo publicidad y musica: `promo` exige acuerdo entre modelos
+    (ver `exclusiones_por_consenso`) porque ahi caen las aperturas de programa,
+    y con un solo modelo no hay como distinguir la autopromocion del arranque
+    de una nota.
+
+    El `umbral` se conserva por compatibilidad, pero **la evidencia dice que no
+    sirve para decidir**: la confianza de Qwen es 0.94 cuando coincide con los
+    otros dos modelos y 0.92 cuando queda solo contra ambos. No discrimina. La
+    señal que si funciona es el consenso, no el numero que el modelo se pone a
+    si mismo.
     """
-    return [b for b in bloques if b.es_basura() and b.confidence >= umbral]
+    return [b for b in bloques if b.tipo in tipos and b.confidence >= umbral]
 
 
-def filtrar_words(words: list[Word], a_excluir: list[BloqueDestilado]) -> list[Word]:
+def exclusiones_por_consenso(
+    por_modelo: list[list[BloqueDestilado]],
+    tipos: frozenset[TipoBloque] = TIPOS_EXCLUIBLES,
+    minimo: int = 2,
+) -> list[tuple[int, int]]:
+    """Rangos de palabra que al menos `minimo` modelos coinciden en excluir.
+
+    Devuelve rangos y no bloques a proposito: cada modelo parte la transmision
+    en bloques distintos (sobre las mismas 20 grabaciones, Qwen produjo 815 y
+    gpt-4o-mini 662), asi que el consenso solo se puede expresar sobre la unidad
+    que todos comparten, que es la palabra.
+
+    Esta es la regla que reemplaza al umbral de confianza. Medido: excluye el
+    11.8% del aire con unanimidad de 3 y 13.2% con acuerdo de 2, contra 29-36%
+    que excluiria un modelo solo -- y esos ~20 puntos de diferencia son
+    exactamente la zona en disputa, o sea donde puede haber periodismo.
+    """
+    votos: dict[int, int] = {}
+    for bloques in por_modelo:
+        for b in bloques:
+            if b.tipo in tipos:
+                for i in range(b.start_word, b.end_word + 1):
+                    votos[i] = votos.get(i, 0) + 1
+
+    excluidas = sorted(i for i, n in votos.items() if n >= minimo)
+    if not excluidas:
+        return []
+
+    rangos: list[tuple[int, int]] = []
+    inicio = anterior = excluidas[0]
+    for i in excluidas[1:]:
+        if i == anterior + 1:
+            anterior = i
+            continue
+        rangos.append((inicio, anterior))
+        inicio = anterior = i
+    rangos.append((inicio, anterior))
+    return rangos
+
+
+def filtrar_words(
+    words: list[Word], a_excluir: list[BloqueDestilado] | list[tuple[int, int]]
+) -> list[Word]:
     """Vista filtrada del transcript, conservando el `index` original de cada
-    palabra (ver nota de indices intactos en el docstring del modulo)."""
+    palabra (ver nota de indices intactos en el docstring del modulo).
+
+    Acepta bloques o rangos crudos, que es lo que devuelve
+    `exclusiones_por_consenso` -- el consenso no tiene un bloque propio porque
+    ningun modelo lo delimito.
+    """
     if not a_excluir:
         return words
-    rangos = [(b.start_word, b.end_word) for b in a_excluir]
+    rangos = [
+        b if isinstance(b, tuple) else (b.start_word, b.end_word) for b in a_excluir
+    ]
     return [w for w in words if not any(lo <= w.index <= hi for lo, hi in rangos)]
+
+
+@dataclass
+class Uso:
+    """Consumo acumulado de una corrida, para poder comparar costo entre
+    modelos sobre el mismo material. Se acumula bajo lock porque los chunks
+    salen concurrentes."""
+
+    llamadas: int = 0
+    tokens_entrada: int = 0
+    tokens_salida: int = 0
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def sumar(self, entrada: int, salida: int) -> None:
+        with self._lock:
+            self.llamadas += 1
+            self.tokens_entrada += entrada
+            self.tokens_salida += salida
 
 
 class Destiller:
@@ -243,6 +358,7 @@ class Destiller:
         self._chunk_size = chunk_size
         self._propio = base_url is not None
         self._concurrencia = max(1, concurrencia)
+        self.uso = Uso()
 
     def destilar(self, words: list[Word]) -> list[BloqueDestilado]:
         """Los chunks son independientes entre si -- cada uno se clasifica solo
@@ -309,6 +425,10 @@ class Destiller:
                     ],
                     **self._formato(),
                 )
+                if response.usage is not None:
+                    self.uso.sumar(
+                        response.usage.prompt_tokens, response.usage.completion_tokens
+                    )
                 return json.loads(response.choices[0].message.content)
             except Exception as exc:
                 error = classify_and_wrap(exc, module="destiller")

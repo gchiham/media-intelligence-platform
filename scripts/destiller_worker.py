@@ -15,6 +15,7 @@ Uso (en la instancia, ver docs/INFRASTRUCTURE.md):
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -48,16 +49,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rehacer", action="store_true", help="reprocesa lo ya destilado")
     parser.add_argument("--etiqueta", help="subcarpeta en S3; por defecto, el slug del modelo")
+    parser.add_argument(
+        "--modelo",
+        help="pisa el modelo configurado. Todo lo demas -- prompt, esquema, chunking, "
+        "parametros -- queda igual, que es lo que hace comparables las corridas.",
+    )
     args = parser.parse_args()
 
     # Mismo criterio que scripts/destiller_eval.py: la instancia propia gana si
     # esta configurada, y si no se cae a la API de OpenAI. Asi el mismo worker
     # corre en la GPU o localmente sin tocar codigo.
     if settings.destiller_base_url:
-        modelo = settings.destiller_model
+        modelo = args.modelo or settings.destiller_model
         destiller = Destiller(api_key="", model=modelo, base_url=settings.destiller_base_url)
     elif settings.openai_api_key:
-        modelo = settings.openai_model
+        modelo = args.modelo or settings.openai_model
         destiller = Destiller(
             api_key=settings.openai_api_key.get_secret_value(), model=modelo
         )
@@ -72,6 +78,7 @@ def main() -> None:
         s3.get_object(Bucket=bucket, Key=f"{PREFIJO}/seleccion.json")["Body"].read()
     )
     print(f"{len(seleccion)} grabaciones | modelo {modelo} | etiqueta {etiqueta}", flush=True)
+    t0 = time.monotonic()
 
     for i, c in enumerate(seleccion, 1):
         cid = f"{c['medio']}__{c['stem']}"
@@ -134,7 +141,12 @@ def main() -> None:
             flush=True,
         )
 
-    print("listo", flush=True)
+    u = destiller.uso
+    print(
+        f"listo | {u.llamadas} llamadas | {u.tokens_entrada} tokens entrada | "
+        f"{u.tokens_salida} tokens salida | {time.monotonic() - t0:.0f}s",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
