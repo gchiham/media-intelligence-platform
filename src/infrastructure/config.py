@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5"
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o-mini"
+    # Destiller (separar basura de periodismo antes de segmentar, ver
+    # docs/DESTILLER_PROPOSAL.md). Con `destiller_base_url` apunta a la
+    # instancia GPU propia sirviendo vLLM; sin ella cae a la API de OpenAI.
+    destiller_base_url: str | None = None
+    destiller_model: str = "Qwen/Qwen2.5-7B-Instruct"
     # Directorio local donde el pipeline busca los archivos de una Grabacion
     # (words.json + audio) y donde escribe los clips generados. Ver
     # RecordingResolver en src/modules/pipeline/resolvers.py -- "local" en

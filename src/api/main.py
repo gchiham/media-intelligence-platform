@@ -10,7 +10,7 @@ import traceback
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-from src.api.routers import auth, clients, editorial, media, pipeline
+from src.api.routers import auth, clients, destiller, editorial, media, pipeline
 from src.infrastructure.db import registry  # noqa: F401 -- registra todos los modelos (FKs cruzadas entre modulos)
 from src.modules.editorial.exceptions import (
     ColaVacia,
@@ -64,6 +64,7 @@ def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(clients.router, prefix="/api/v1")
+app.include_router(destiller.router, prefix="/api/v1")
 app.include_router(editorial.router, prefix="/api/v1")
 app.include_router(media.router, prefix="/api/v1")
 app.include_router(pipeline.router, prefix="/api/v1")

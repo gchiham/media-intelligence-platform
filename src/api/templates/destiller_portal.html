@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Destiller — validacion</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --panel-2: #1c212a; --line: #262c37;
+    --txt: #e6e9ef; --muted: #8b95a7; --accent: #4c8dff;
+    --ok: #35c07f; --bad: #ff5f6b;
+    --noticia: #35c07f; --publicidad: #ff8b3d; --religioso: #b07cff;
+    --promo: #f2b544; --musica: #4cc7e0; --relleno: #7c8aa0; --desconocido: #ff5f6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+
+  header { position: sticky; top: 0; z-index: 10; display: flex; gap: 14px; align-items: center;
+           padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .spacer { flex: 1; }
+  .progress { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .bar { width: 150px; height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  .speeds { display: flex; gap: 2px; background: var(--panel-2); padding: 3px; border-radius: 8px; }
+  .speeds button { background: none; border: 0; padding: 4px 9px; border-radius: 6px;
+                   font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .speeds button.on { background: var(--accent); color: #fff; }
+  .btn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .quien { color: var(--muted); font-size: 12px; }
+  .quien b { color: var(--txt); }
+
+  main { padding: 16px 20px 120px; max-width: 1000px; margin: 0 auto; }
+  .gate { max-width: 420px; margin: 12vh auto; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 12px; padding: 24px; }
+  .gate h2 { margin: 0 0 6px; font-size: 17px; }
+  .gate p { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+  .gate label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+  .gate input, .gate select { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+                              border-radius: 8px; padding: 9px 11px; }
+  .gate button { width: 100%; margin-top: 18px; padding: 10px; }
+
+  .blk { background: var(--panel); border: 1px solid var(--line); border-left-width: 4px;
+         border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+  .blk.sel { border-color: var(--accent); }
+  .blk.yendo { opacity: .4; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .play { width: 30px; height: 30px; flex: none; border-radius: 50%; border: 1px solid var(--line);
+          background: var(--panel-2); display: grid; place-items: center; font-size: 11px; }
+  .play:hover { border-color: var(--accent); }
+  .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+         padding: 3px 8px; border-radius: 6px; color: #0f1115; }
+  .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .motivo { color: var(--muted); font-size: 12px; font-style: italic; margin: 8px 0 0; }
+  .txt { margin: 10px 0 0; padding: 10px 12px; background: #0c0e12; border-radius: 8px;
+         max-height: 110px; overflow: hidden; position: relative; white-space: pre-wrap; }
+  .txt.open { max-height: none; }
+  .txt:not(.open)::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 40px;
+                           background: linear-gradient(transparent, #0c0e12); }
+  .more { background: none; border: 0; color: var(--accent); font-size: 12px; padding: 6px 0 0; }
+  .verdict { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px;
+             padding-top: 10px; border-top: 1px solid var(--line); }
+  .verdict .lbl { color: var(--muted); font-size: 12px; }
+  .vb { background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; font-size: 12px; }
+  .vb:hover { border-color: var(--accent); }
+  .vb.ok:hover { border-color: var(--ok); }
+  footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel);
+           border-top: 1px solid var(--line); padding: 8px 16px; font-size: 12px; color: var(--muted);
+           display: flex; gap: 18px; align-items: center; }
+  kbd { background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 4px; padding: 1px 5px; font-size: 11px; color: var(--txt); }
+  .vacio { text-align: center; color: var(--muted); padding: 60px 20px; }
+  .vacio b { display: block; color: var(--txt); font-size: 16px; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<div id="gate" class="gate">
+  <h2>Validacion de Destiller</h2>
+  <p>Cada quien valida bloques distintos: la cola reparte y no repite.</p>
+  <label>Tu nombre</label>
+  <input id="in-validador" placeholder="ej. gustavo" autocomplete="off">
+  <label>Modelo a validar</label>
+  <select id="in-modelo"></select>
+  <button class="btn primary" id="btn-entrar">Empezar</button>
+</div>
+
+<div id="app" style="display:none">
+  <header>
+    <h1>Destiller</h1>
+    <span class="quien">validando <b id="quien"></b> · <span id="que-modelo"></span></span>
+    <div class="progress">
+      <div class="bar"><i id="barra"></i></div>
+      <span id="conteo">—</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="speeds" id="speeds"></div>
+    <button class="btn" id="btn-mas">Traer mas</button>
+  </header>
+  <main><div id="bloques"></div></main>
+  <footer>
+    <span><kbd>J</kbd>/<kbd>K</kbd> mover</span>
+    <span><kbd>espacio</kbd> escuchar</span>
+    <span><kbd>A</kbd> correcto</span>
+    <span><kbd>1</kbd>–<kbd>6</kbd> corregir</span>
+    <span><kbd>S</kbd> velocidad</span>
+    <span id="estado" class="spacer" style="text-align:right"></span>
+  </footer>
+</div>
+
+<audio id="player" preload="none"></audio>
+
+<script>
+const TIPOS = ["noticia", "publicidad", "religioso", "promo", "musica", "relleno"];
+const VELOCIDADES = [1, 1.25, 1.5, 1.75, 2, 2.5];
+const token = new URLSearchParams(location.search).get("token") || "";
+
+const player = document.getElementById("player");
+let validador = localStorage.getItem("destiller:validador") || "";
+let modelo = "";
+let velocidad = parseFloat(localStorage.getItem("destiller:vel") || "1.5");
+let bloques = [];      // solo lo pendiente: lo validado se va de la lista
+let sel = 0;
+let corteFin = null;
+
+const api = (ruta, params = {}) => {
+  const q = new URLSearchParams({ token, ...params });
+  return `/destiller/${ruta}?${q}`;
+};
+const mmss = s => { s = Math.max(0, Math.round(s));
+  return String(Math.floor(s/60)).padStart(2,"0") + ":" + String(s%60).padStart(2,"0"); };
+const estado = m => document.getElementById("estado").textContent = m;
+
+/* ---------- arranque ---------- */
+async function iniciar() {
+  const r = await fetch(api("modelos"));
+  if (!r.ok) { document.getElementById("gate").innerHTML =
+    "<h2>Sin acceso</h2><p>El token del enlace no es valido. Pedilo a quien te compartio el portal.</p>"; return; }
+  const { modelos } = await r.json();
+  const sel = document.getElementById("in-modelo");
+  sel.innerHTML = modelos.map(m => `<option>${m}</option>`).join("")
+    || "<option value=''>(no hay nada cargado)</option>";
+  document.getElementById("in-validador").value = validador;
+}
+
+document.getElementById("btn-entrar").onclick = async () => {
+  const nombre = document.getElementById("in-validador").value.trim().toLowerCase();
+  if (!nombre) { document.getElementById("in-validador").focus(); return; }
+  validador = nombre;
+  modelo = document.getElementById("in-modelo").value;
+  localStorage.setItem("destiller:validador", validador);
+
+  document.getElementById("gate").style.display = "none";
+  document.getElementById("app").style.display = "";
+  document.getElementById("quien").textContent = validador;
+  document.getElementById("que-modelo").textContent = modelo;
+  pintarVelocidades();
+  await traer();
+};
+
+/* ---------- cola ---------- */
+async function traer() {
+  estado("pidiendo tanda...");
+  const r = await fetch(api("tanda", { validador, modelo, limite: 40 }));
+  if (!r.ok) { estado("error pidiendo la tanda"); return; }
+  const data = await r.json();
+  bloques = data.bloques;
+  sel = 0;
+  pintarProgreso(data.progreso);
+  pintar();
+  estado(bloques.length ? "" : "no queda nada por validar");
+}
+
+function pintarProgreso(p) {
+  document.getElementById("conteo").textContent = `${p.validados} / ${p.total}`;
+  document.getElementById("barra").style.width = (100 * p.validados / (p.total || 1)) + "%";
+  const otros = p.por_validador.map(v => `${v.validador} ${v.n}`).join(" · ");
+  if (otros) document.getElementById("quien").title = otros;
+}
+
+/* ---------- render ---------- */
+function pintar() {
+  const cont = document.getElementById("bloques");
+  if (!bloques.length) {
+    cont.innerHTML = `<div class="vacio"><b>No queda nada pendiente</b>
+      Ya validaste todo lo que la cola tiene para vos en este modelo.</div>`;
+    return;
+  }
+  cont.innerHTML = bloques.map((b, i) => `
+    <div class="blk ${i === sel ? "sel" : ""}" data-i="${i}" style="border-left-color: var(--${b.tipo})">
+      <div class="row">
+        <button class="play" data-play="${i}">&#9654;</button>
+        <span class="tag" style="background: var(--${b.tipo})">${b.tipo}</span>
+        <span class="meta">conf ${b.confidence.toFixed(2)}</span>
+        <span class="meta">${b.medio} · ${b.fecha} ${String(b.hora_local).padStart(2,"0")}h</span>
+        <span class="meta">${mmss(b.inicio)} – ${mmss(b.fin)} (${Math.round(b.fin-b.inicio)}s)</span>
+        ${b.audio ? "" : '<span class="meta">sin audio</span>'}
+      </div>
+      ${b.motivo ? `<p class="motivo">${b.motivo}</p>` : ""}
+      <div class="txt" data-txt="${i}">${b.texto || "<i>(sin texto)</i>"}</div>
+      <button class="more" data-more="${i}">ver completo</button>
+      <div class="verdict">
+        <span class="lbl">el tipo es correcto?</span>
+        <button class="vb ok" data-ok="${i}">si</button>
+        <span class="lbl">no, en realidad es:</span>
+        ${TIPOS.filter(t => t !== b.tipo).map(t =>
+          `<button class="vb fix" data-fix="${i}" data-tipo="${t}">${t}</button>`).join("")}
+      </div>
+    </div>`).join("");
+
+  cont.querySelectorAll("[data-play]").forEach(el =>
+    el.onclick = e => { e.stopPropagation(); sel = +el.dataset.play; reproducir(); });
+  cont.querySelectorAll("[data-more]").forEach(el =>
+    el.onclick = () => { const t = cont.querySelector(`[data-txt="${el.dataset.more}"]`);
+      t.classList.toggle("open");
+      el.textContent = t.classList.contains("open") ? "contraer" : "ver completo"; });
+  cont.querySelectorAll("[data-ok]").forEach(el =>
+    el.onclick = () => { sel = +el.dataset.ok; enviar(true, null); });
+  cont.querySelectorAll("[data-fix]").forEach(el =>
+    el.onclick = () => { sel = +el.dataset.fix; enviar(false, el.dataset.tipo); });
+  cont.querySelectorAll(".blk").forEach(el =>
+    el.onclick = () => { sel = +el.dataset.i; pintar(); });
+}
+
+/* ---------- veredicto ---------- */
+async function enviar(ok, tipoReal) {
+  const b = bloques[sel];
+  if (!b) return;
+  // Se saca de la lista de inmediato: el usuario no deberia esperar al servidor
+  // para seguir. Si el POST falla, vuelve a su lugar y se avisa.
+  const copia = b, pos = sel;
+  bloques.splice(sel, 1);
+  if (sel >= bloques.length) sel = Math.max(0, bloques.length - 1);
+  pintar();
+
+  try {
+    const r = await fetch(api("veredicto"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bloque_id: copia.id, validador, ok, tipo_real: ok ? null : tipoReal }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    refrescarProgreso();
+    if (bloques.length === 0) traer();
+    else if (bloques.length <= 5) estado(`quedan ${bloques.length} en esta tanda`);
+  } catch (e) {
+    bloques.splice(pos, 0, copia);
+    sel = pos; pintar();
+    estado("no se pudo guardar; se reintenta al volver a marcarlo");
+  }
+}
+
+async function refrescarProgreso() {
+  const r = await fetch(api("progreso", { modelo }));
+  if (r.ok) pintarProgreso(await r.json());
+}
+
+/* ---------- audio ---------- */
+function reproducir() {
+  const b = bloques[sel];
+  if (!b || !b.audio) { estado("este bloque no tiene audio: revisalo por texto"); return; }
+  if (player.dataset.src !== b.audio) { player.src = b.audio; player.dataset.src = b.audio; }
+  player.playbackRate = velocidad;
+  player.currentTime = b.inicio;
+  corteFin = b.fin;
+  player.play().then(() => { player.playbackRate = velocidad; }).catch(() => {});
+  pintar();
+}
+player.addEventListener("timeupdate", () => {
+  if (corteFin !== null && player.currentTime >= corteFin) { player.pause(); corteFin = null; }
+});
+
+function pintarVelocidades() {
+  document.getElementById("speeds").innerHTML = VELOCIDADES.map(v =>
+    `<button class="${v === velocidad ? "on" : ""}" data-v="${v}">${v}x</button>`).join("");
+  document.querySelectorAll("#speeds button").forEach(el =>
+    el.onclick = () => setVelocidad(parseFloat(el.dataset.v)));
+}
+function setVelocidad(v) {
+  velocidad = v; player.playbackRate = v;
+  localStorage.setItem("destiller:vel", String(v));
+  pintarVelocidades();
+}
+
+/* ---------- teclado ---------- */
+document.addEventListener("keydown", e => {
+  if (document.getElementById("app").style.display === "none") return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "j" || e.key === "J") { sel = Math.min(sel + 1, bloques.length - 1); pintar(); scrollSel(); }
+  else if (e.key === "k" || e.key === "K") { sel = Math.max(sel - 1, 0); pintar(); scrollSel(); }
+  else if (e.key === " ") { e.preventDefault(); player.paused ? reproducir() : player.pause(); }
+  else if (e.key === "a" || e.key === "A") enviar(true, null);
+  else if (e.key === "s" || e.key === "S")
+    setVelocidad(VELOCIDADES[(VELOCIDADES.indexOf(velocidad) + 1) % VELOCIDADES.length]);
+  else if (/^[1-6]$/.test(e.key)) {
+    const b = bloques[sel];
+    if (b && TIPOS[+e.key - 1] !== b.tipo) enviar(false, TIPOS[+e.key - 1]);
+    else if (b) enviar(true, null);   // corregir al mismo tipo es confirmarlo
+  }
+});
+function scrollSel() { const el = document.querySelector(".blk.sel"); if (el) el.scrollIntoView({ block: "nearest" }); }
+
+document.getElementById("btn-mas").onclick = traer;
+document.getElementById("in-validador").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("btn-entrar").click();
+});
+iniciar();
+</script>
+</body>
+</html>

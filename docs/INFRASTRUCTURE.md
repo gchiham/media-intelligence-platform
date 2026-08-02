@@ -99,6 +99,44 @@ aws ssm send-command --instance-ids <nuevo-instance-id> \
 aws ssm get-command-invocation --command-id <id> --instance-id <nuevo-instance-id>
 ```
 
+## Instancia `destiller` (LLM propio para separar basura de noticia)
+
+**Por qué existe:** al 2026-08-01 las cuentas de OpenAI **y** Anthropic están sin créditos (`429 credit_balance_exhausted` / ver commit `36b8538`), así que no hay proveedor comercial disponible para correr el paso de Destiller (ver [DESTILLER_PROPOSAL.md](DESTILLER_PROPOSAL.md)). Un modelo propio sobre GPU efímera dejó de ser una alternativa a evaluar y pasó a ser el único camino que corre.
+
+**Instancia actual:** `i-05a56f34d06b198e5` (`media-intel-destiller`, g6.xlarge/L4 24 GB, `us-east-1d`, lanzada 2026-08-01). Cuesta ~$0.80/h — **es efímera, terminarla al acabar**, mismo criterio que chepita y Clipper.
+
+Se lanza igual que chepita (mismo AMI `CHEPITA-L4-v1.2.0`, mismo SG `sg-033ac2dd79d76f56a`, mismo perfil `media-intel-ec2-transcribe`, las 3 `tag-specifications` obligatorias) — el AMI solo se aprovecha por el driver NVIDIA y CUDA ya instalados, nada de Whisper se usa acá.
+
+**El volumen raíz del AMI no alcanza.** Viene de 29 GB con ~3.7 GB libres (`/opt/pytorch` solo ya pesa 9.8 GB), y `pip install vllm` muere con `[Errno 28] No space left on device` — no como error de disco sino como fallo de instalación a media descarga. Hay que crecer el volumen **antes** de instalar:
+
+```bash
+aws ec2 modify-volume --volume-id <vol-de-la-instancia> --size 200
+# esperar a que quede en `optimizing` (no hace falta `completed`), luego por SSM:
+growpart /dev/nvme0n1 1 && resize2fs /dev/nvme0n1p1
+```
+
+**Serving:** vLLM en un venv aparte (`/opt/vllm`), no en `/opt/pytorch` — instalarlo ahí encima le cambiaría la versión de torch al entorno de Faster-Whisper que viene horneado.
+
+```bash
+# en la instancia, ya con el AMI DESTILLER:
+bash /home/ubuntu/serve_destiller.sh   # vLLM en :8000, ventana 16k
+bash /home/ubuntu/run_destiller.sh     # el worker contra 127.0.0.1:8000
+```
+
+**La concurrencia del cliente es la palanca de throughput, no la GPU.** Medido acá: mandando un chunk a la vez (batch=1) daba ~12 tokens/s y ~3.5 min por grabación — en decode, el costo de leer los 15 GB de pesos se paga por token generado sin importar cuántas secuencias haya en vuelo, así que la GPU marca 100% de utilización mientras está casi vacía. Con 8 chunks en paralelo (`Destiller(concurrencia=8)`, los chunks son independientes) bajó a ~50 s por grabación, **~4x**, con la misma GPU a 72 W. Si hace falta más, la palanca siguiente es ancho de banda de memoria, no cómputo: la L4 da ~300 GB/s, la A10G de `g5.xlarge` ~600 GB/s por +25% de precio/hora. vLLM expone la API de OpenAI, así que `Destiller` usa el mismo cliente y solo cambia cómo pide salida estructurada: `guided_json` (decodificación restringida por gramática) en vez de `response_format: json_schema` con `strict`. Ver `Destiller._formato()` en [src/modules/ai/destiller.py](../src/modules/ai/destiller.py).
+
+**AMI horneado — `DESTILLER-L4-v1.0.0` (`ami-0d9f7ccdd0bad022a`, 2026-08-01).** Contiene todo lo de abajo ya resuelto. **Usar este para relanzar destiller**, no el de chepita: levantar vLLM sobre `CHEPITA-L4-v1.2.0` desde cero costó cinco fallos de arranque encadenados, cada uno con una causa distinta y ninguno con un mensaje obvio. La causa común es que el AMI de chepita está horneado para *ejecutar* kernels precompilados de Faster-Whisper, no para compilar nada, y vLLM compila en tiempo de arranque:
+
+| # | Síntoma | Causa real | Arreglo |
+|---|---|---|---|
+| 1 | `pip install` muere a media descarga | root de 29 GB con 3.7 libres | volumen a 200 GB |
+| 2 | vLLM sale en el parseo de argumentos | `--disable-log-requests` no existe en 0.26 | quitarlo |
+| 3 | `fatal error: Python.h` | Triton compila un helper CUDA al arrancar | `python3-dev` |
+| 4 | `Could not find nvcc` | el AMI trae driver, no toolkit | `CUDA_HOME` al nvcc **que ya trae torch** en `site-packages/nvidia/cu13` — no instalar el toolkit de apt, es CUDA 12 contra un torch de CUDA 13 |
+| 5 | `Ninja build failed` en el profiling de arranque | FlashInfer compila en JIT su sampler y revienta contra los headers de CUDA 13 | `ninja-build` + `VLLM_USE_FLASHINFER_SAMPLER=0` |
+
+**El trabajo va a la instancia, no al revés.** `scripts/destiller_worker.py` corre *en* la instancia y habla con vLLM por `127.0.0.1:8000`; nada se llama desde afuera. No es solo una preferencia de diseño: el SG no expone puertos, y el usuario IAM `media-intelligence-dev` tiene `AuthorizeSecurityGroupIngress` pero **no** `Revoke` (ver la regla huérfana `sgr-0c597009d2198a293` más arriba, que sigue abierta por eso mismo) — cada puerto que se abre queda abierto para siempre. Mismo patrón que los workers de chepita.
+
 ## Worker de transcripción (tal como quedó desplegado y horneado en el AMI)
 
 - `/home/ubuntu/worker.py` — **worker canónico de producción** (con prefetch integrado, ver [scripts/worker_prefetch.py](../scripts/worker_prefetch.py) en este repo para la versión versionada). Carga el modelo Whisper una sola vez, consume la cola SQS en loop, descarga el archivo N+1 en un hilo mientras transcribe N.

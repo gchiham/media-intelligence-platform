@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Destiller — validacion</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --panel-2: #1c212a; --line: #262c37;
+    --txt: #e6e9ef; --muted: #8b95a7; --accent: #4c8dff;
+    --ok: #35c07f; --bad: #ff5f6b; --warn: #f2b544;
+    --noticia: #35c07f; --publicidad: #ff8b3d; --religioso: #b07cff;
+    --promo: #f2b544; --musica: #4cc7e0; --relleno: #7c8aa0; --desconocido: #ff5f6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+
+  header {
+    position: sticky; top: 0; z-index: 10; display: flex; gap: 16px; align-items: center;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .spacer { flex: 1; }
+
+  .progress { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .bar { width: 160px; height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+
+  .speeds { display: flex; gap: 2px; background: var(--panel-2); padding: 3px; border-radius: 8px; }
+  .speeds button {
+    background: none; border: 0; padding: 4px 9px; border-radius: 6px;
+    font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted);
+  }
+  .speeds button.on { background: var(--accent); color: #fff; }
+
+  .btn {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 12px; font-size: 13px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  main { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 49px); }
+
+  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; max-height: calc(100vh - 49px); position: sticky; top: 49px; }
+  .rec {
+    padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer;
+  }
+  .rec:hover { background: var(--panel-2); }
+  .rec.on { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+  .rec b { display: block; font-weight: 600; font-size: 13px; }
+  .rec span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .rec .mini { height: 4px; border-radius: 2px; background: #0c0e12; margin-top: 6px; overflow: hidden; }
+  .rec .mini > i { display: block; height: 100%; background: var(--ok); width: 0; }
+
+  section { padding: 16px 20px 120px; max-width: 1100px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .chip {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 11px; font-size: 12px; color: var(--muted);
+  }
+  .chip.on { color: var(--txt); border-color: var(--accent); }
+
+  .blk {
+    background: var(--panel); border: 1px solid var(--line); border-left-width: 4px;
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 10px;
+  }
+  .blk.sel { border-color: var(--accent); border-left-color: var(--accent); }
+  .blk.done { opacity: .55; }
+  .blk.done.sel { opacity: 1; }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .play {
+    width: 30px; height: 30px; flex: none; border-radius: 50%; border: 1px solid var(--line);
+    background: var(--panel-2); display: grid; place-items: center; font-size: 11px;
+  }
+  .play:hover { border-color: var(--accent); }
+  .tag {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    padding: 3px 8px; border-radius: 6px; color: #0f1115;
+  }
+  .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .motivo { color: var(--muted); font-size: 12px; font-style: italic; margin: 8px 0 0; }
+
+  .txt {
+    margin: 10px 0 0; padding: 10px 12px; background: #0c0e12; border-radius: 8px;
+    max-height: 110px; overflow: hidden; position: relative; white-space: pre-wrap;
+  }
+  .txt.open { max-height: none; }
+  .txt:not(.open)::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 40px;
+    background: linear-gradient(transparent, #0c0e12);
+  }
+  .more { background: none; border: 0; color: var(--accent); font-size: 12px; padding: 6px 0 0; }
+
+  .verdict { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px;
+             padding-top: 10px; border-top: 1px solid var(--line); }
+  .verdict .lbl { color: var(--muted); font-size: 12px; margin-right: 2px; }
+  .vb { background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; font-size: 12px; }
+  .vb.ok.on { background: var(--ok); border-color: var(--ok); color: #06120c; font-weight: 600; }
+  .vb.fix.on { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+  .vb:hover { border-color: var(--accent); }
+
+  footer {
+    position: fixed; bottom: 0; left: 0; right: 0; background: var(--panel);
+    border-top: 1px solid var(--line); padding: 8px 16px; font-size: 12px; color: var(--muted);
+    display: flex; gap: 18px; align-items: center;
+  }
+  kbd {
+    background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 5px; font-size: 11px; font-family: inherit; color: var(--txt);
+  }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Destiller — validacion</h1>
+  <div class="progress">
+    <div class="bar"><i id="barra"></i></div>
+    <span id="conteo">0 / 0</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="speeds" id="speeds"></div>
+  <button class="btn" id="btn-saltar">Siguiente sin validar</button>
+  <button class="btn primary" id="btn-export">Exportar veredictos</button>
+</header>
+
+<main>
+  <aside id="lista"></aside>
+  <section>
+    <div class="filters" id="filtros"></div>
+    <div id="bloques"></div>
+  </section>
+</main>
+
+<footer>
+  <span><kbd>J</kbd>/<kbd>K</kbd> mover</span>
+  <span><kbd>espacio</kbd> escuchar</span>
+  <span><kbd>A</kbd> correcto</span>
+  <span><kbd>1</kbd>–<kbd>6</kbd> corregir tipo</span>
+  <span><kbd>S</kbd> velocidad</span>
+  <span id="estado" class="spacer" style="text-align:right"></span>
+</footer>
+
+<audio id="player" preload="none"></audio>
+
+<script>
+const DATOS = /*__DATOS__*/null;
+const CLAVE = "destiller-eval-v1";
+const TIPOS = ["noticia", "publicidad", "religioso", "promo", "musica", "relleno"];
+const VELOCIDADES = [1, 1.25, 1.5, 1.75, 2, 2.5];
+
+const player = document.getElementById("player");
+let veredictos = JSON.parse(localStorage.getItem(CLAVE) || "{}");
+let velocidad = parseFloat(localStorage.getItem(CLAVE + ":vel") || "1.5");
+let actual = 0;          // indice de grabacion
+let sel = 0;             // indice de bloque seleccionado (sobre la vista filtrada)
+let filtro = "todos";
+let corteFin = null;     // segundo en el que hay que detener la reproduccion
+
+const grabacion = () => DATOS.grabaciones[actual];
+const visibles = () => grabacion().bloques.filter(b =>
+  filtro === "todos" ? true :
+  filtro === "pendientes" ? !veredictos[b.id] : b.tipo === filtro);
+
+function guardar() {
+  localStorage.setItem(CLAVE, JSON.stringify(veredictos));
+  pintarProgreso();
+}
+
+const mmss = s => {
+  s = Math.max(0, Math.round(s));
+  return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+};
+
+/* ---------- progreso ---------- */
+function pintarProgreso() {
+  const todos = DATOS.grabaciones.flatMap(g => g.bloques);
+  const hechos = todos.filter(b => veredictos[b.id]).length;
+  document.getElementById("conteo").textContent = `${hechos} / ${todos.length}`;
+  document.getElementById("barra").style.width = (100 * hechos / (todos.length || 1)) + "%";
+  document.querySelectorAll("#lista .rec").forEach((el, i) => {
+    const bs = DATOS.grabaciones[i].bloques;
+    const n = bs.filter(b => veredictos[b.id]).length;
+    el.querySelector(".mini > i").style.width = (100 * n / (bs.length || 1)) + "%";
+  });
+}
+
+/* ---------- sidebar ---------- */
+function pintarLista() {
+  document.getElementById("lista").innerHTML = DATOS.grabaciones.map((g, i) => `
+    <div class="rec ${i === actual ? "on" : ""}" data-i="${i}">
+      <b>${g.medio}</b>
+      <span>${g.fecha} · ${String(g.hora_local).padStart(2, "0")}h local · ${g.bloques.length} bloques</span>
+      <div class="mini"><i></i></div>
+    </div>`).join("");
+  document.querySelectorAll("#lista .rec").forEach(el =>
+    el.onclick = () => { actual = +el.dataset.i; sel = 0; cargarAudio(); pintarTodo(); });
+}
+
+/* ---------- filtros ---------- */
+function pintarFiltros() {
+  const conteos = {};
+  grabacion().bloques.forEach(b => conteos[b.tipo] = (conteos[b.tipo] || 0) + 1);
+  const opciones = ["todos", "pendientes", ...TIPOS, "desconocido"];
+  document.getElementById("filtros").innerHTML = opciones.map(o => {
+    const n = o === "todos" ? grabacion().bloques.length
+            : o === "pendientes" ? grabacion().bloques.filter(b => !veredictos[b.id]).length
+            : (conteos[o] || 0);
+    if (n === 0 && o !== "todos" && o !== "pendientes") return "";
+    return `<button class="chip ${filtro === o ? "on" : ""}" data-f="${o}">${o} · ${n}</button>`;
+  }).join("");
+  document.querySelectorAll(".chip").forEach(el =>
+    el.onclick = () => { filtro = el.dataset.f; sel = 0; pintarBloques(); pintarFiltros(); });
+}
+
+/* ---------- bloques ---------- */
+function pintarBloques() {
+  const bs = visibles();
+  const cont = document.getElementById("bloques");
+  if (!bs.length) { cont.innerHTML = `<div class="empty">no hay bloques con este filtro</div>`; return; }
+
+  cont.innerHTML = bs.map((b, i) => {
+    const v = veredictos[b.id];
+    const dur = b.fin - b.inicio;
+    return `
+    <div class="blk ${i === sel ? "sel" : ""} ${v ? "done" : ""}" data-i="${i}"
+         style="border-left-color: var(--${b.tipo})">
+      <div class="row">
+        <button class="play" data-play="${i}">&#9654;</button>
+        <span class="tag" style="background: var(--${b.tipo})">${b.tipo}</span>
+        <span class="meta">conf ${b.confidence.toFixed(2)}</span>
+        <span class="meta">${mmss(b.inicio)} – ${mmss(b.fin)} (${Math.round(dur)}s)</span>
+        <span class="meta">palabras ${b.start_word}–${b.end_word}</span>
+      </div>
+      ${b.motivo ? `<p class="motivo">${b.motivo}</p>` : ""}
+      <div class="txt" data-txt="${i}">${b.texto || "<i>(sin texto)</i>"}</div>
+      <button class="more" data-more="${i}">ver completo</button>
+      <div class="verdict">
+        <span class="lbl">el tipo es correcto?</span>
+        <button class="vb ok ${v && v.ok ? "on" : ""}" data-ok="${i}">si</button>
+        <span class="lbl">no, en realidad es:</span>
+        ${TIPOS.filter(t => t !== b.tipo).map(t =>
+          `<button class="vb fix ${v && !v.ok && v.tipo_real === t ? "on" : ""}"
+            data-fix="${i}" data-tipo="${t}">${t}</button>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
+
+  cont.querySelectorAll("[data-play]").forEach(el =>
+    el.onclick = e => { e.stopPropagation(); sel = +el.dataset.play; reproducir(); });
+  cont.querySelectorAll("[data-more]").forEach(el =>
+    el.onclick = () => {
+      const t = cont.querySelector(`[data-txt="${el.dataset.more}"]`);
+      t.classList.toggle("open");
+      el.textContent = t.classList.contains("open") ? "contraer" : "ver completo";
+    });
+  cont.querySelectorAll("[data-ok]").forEach(el =>
+    el.onclick = () => { sel = +el.dataset.ok; marcar(true); });
+  cont.querySelectorAll("[data-fix]").forEach(el =>
+    el.onclick = () => { sel = +el.dataset.fix; marcar(false, el.dataset.tipo); });
+  cont.querySelectorAll(".blk").forEach(el =>
+    el.onclick = () => { sel = +el.dataset.i; pintarBloques(); });
+}
+
+function pintarTodo() { pintarLista(); pintarFiltros(); pintarBloques(); pintarProgreso(); }
+
+/* ---------- veredictos ---------- */
+function marcar(ok, tipoReal) {
+  const b = visibles()[sel];
+  if (!b) return;
+  // Corregir al mismo tipo que ya dijo el LLM es confirmarlo, no corregirlo:
+  // registrarlo como correccion produciria un veredicto contradictorio
+  // (tipo_llm == tipo_real con ok=false) que romperia la calibracion.
+  if (!ok && tipoReal === b.tipo) ok = true;
+  veredictos[b.id] = ok
+    ? { ok: true, tipo_llm: b.tipo }
+    : { ok: false, tipo_llm: b.tipo, tipo_real: tipoReal };
+  guardar();
+  // Con el filtro "pendientes" el bloque validado desaparece de la vista, asi
+  // que el indice se queda quieto y ya apunta al siguiente por revisar.
+  if (filtro !== "pendientes") sel = Math.min(sel + 1, visibles().length - 1);
+  pintarBloques();
+  pintarFiltros();
+  const el = document.querySelector(".blk.sel");
+  if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+/* ---------- audio ---------- */
+function cargarAudio() {
+  const g = grabacion();
+  player.pause();
+  corteFin = null;
+  if (g.audio) { player.src = g.audio; document.getElementById("estado").textContent = ""; }
+  else { player.removeAttribute("src"); document.getElementById("estado").textContent = "esta grabacion no tiene audio: revisar por texto"; }
+}
+
+function reproducir() {
+  const b = visibles()[sel];
+  if (!b) return;
+  if (!grabacion().audio) { pintarBloques(); return; }
+  player.playbackRate = velocidad;
+  player.currentTime = b.inicio;
+  corteFin = b.fin;
+  player.play().then(() => { player.playbackRate = velocidad; }).catch(() => {});
+  pintarBloques();
+}
+
+player.addEventListener("timeupdate", () => {
+  if (corteFin !== null && player.currentTime >= corteFin) { player.pause(); corteFin = null; }
+});
+
+function pintarVelocidades() {
+  document.getElementById("speeds").innerHTML = VELOCIDADES.map(v =>
+    `<button class="${v === velocidad ? "on" : ""}" data-v="${v}">${v}x</button>`).join("");
+  document.querySelectorAll("#speeds button").forEach(el =>
+    el.onclick = () => setVelocidad(parseFloat(el.dataset.v)));
+}
+
+function setVelocidad(v) {
+  velocidad = v;
+  player.playbackRate = v;
+  localStorage.setItem(CLAVE + ":vel", String(v));
+  pintarVelocidades();
+}
+
+/* ---------- teclado ---------- */
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  const bs = visibles();
+  if (e.key === "j" || e.key === "J") { sel = Math.min(sel + 1, bs.length - 1); pintarBloques(); scrollSel(); }
+  else if (e.key === "k" || e.key === "K") { sel = Math.max(sel - 1, 0); pintarBloques(); scrollSel(); }
+  else if (e.key === " ") { e.preventDefault(); player.paused ? reproducir() : player.pause(); }
+  else if (e.key === "a" || e.key === "A") marcar(true);
+  else if (e.key === "s" || e.key === "S") setVelocidad(VELOCIDADES[(VELOCIDADES.indexOf(velocidad) + 1) % VELOCIDADES.length]);
+  else if (/^[1-6]$/.test(e.key)) marcar(false, TIPOS[+e.key - 1]);
+});
+
+function scrollSel() {
+  const el = document.querySelector(".blk.sel");
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+
+/* ---------- acciones ---------- */
+document.getElementById("btn-saltar").onclick = () => {
+  for (let n = 0; n < DATOS.grabaciones.length; n++) {
+    const i = (actual + n) % DATOS.grabaciones.length;
+    if (DATOS.grabaciones[i].bloques.some(b => !veredictos[b.id])) {
+      actual = i; sel = 0; filtro = "pendientes"; cargarAudio(); pintarTodo(); return;
+    }
+  }
+  document.getElementById("estado").textContent = "todo validado";
+};
+
+document.getElementById("btn-export").onclick = () => {
+  const salida = { modelo: DATOS.modelo, veredictos };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(salida, null, 1)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = "veredictos.json"; a.click();
+  URL.revokeObjectURL(url);
+};
+
+pintarVelocidades();
+cargarAudio();
+pintarTodo();
+</script>
+</body>
+</html>
