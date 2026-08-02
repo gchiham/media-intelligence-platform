@@ -11,6 +11,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import ENUM as PGENUM
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 revision: str = "c4d81ba90e17"
@@ -22,8 +23,14 @@ _TIPOS = ("noticia", "publicidad", "religioso", "promo", "musica", "relleno", "d
 
 
 def upgrade() -> None:
-    tipo = sa.Enum(*_TIPOS, name="tipo_bloque_destiller")
-    tipo.create(op.get_bind(), checkfirst=True)
+    # El tipo se crea una sola vez, explicitamente. Las columnas lo referencian
+    # con `create_type=False`: sin eso, cada `create_table` que lo menciona
+    # emite su propio CREATE TYPE y la segunda tabla falla con DuplicateObject
+    # -- y como el enum queda commiteado, el reintento del entrypoint vuelve a
+    # fallar igual. `checkfirst` cubre justamente ese caso: reejecutar despues
+    # de un intento a medias no revienta.
+    PGENUM(*_TIPOS, name="tipo_bloque_destiller").create(op.get_bind(), checkfirst=True)
+    tipo = PGENUM(*_TIPOS, name="tipo_bloque_destiller", create_type=False)
 
     op.create_table(
         "destiller_bloques",
@@ -79,4 +86,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("destiller_veredictos")
     op.drop_table("destiller_bloques")
-    sa.Enum(name="tipo_bloque_destiller").drop(op.get_bind(), checkfirst=True)
+    PGENUM(name="tipo_bloque_destiller").drop(op.get_bind(), checkfirst=True)
