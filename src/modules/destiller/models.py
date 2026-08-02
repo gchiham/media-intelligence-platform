@@ -21,6 +21,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -74,6 +75,33 @@ class BloqueValidacion(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     motivo: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     texto: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # --- Priorizacion de la cola -------------------------------------------
+    # La validacion humana empieza por donde los modelos discrepan, que es
+    # donde esta la informacion. El numero ES el orden de entrega, no una
+    # etiqueta: la cola ordena por esta columna.
+    #   1  mayoria de palabras discrepan en la decision binaria (basura/no)
+    #   2  minoria discrepan en binario -- los modelos cortan distinto
+    #   3  muestra de control: acuerdo exacto, 20% deterministico
+    #   4  acuerdo binario, desacuerdo de subtipo
+    #   5  resto de los acuerdos exactos
+    # El control va antes que el subtipo a proposito: en esta etapa lo que se
+    # valida es la decision binaria, que es la unica que el pipeline usa --
+    # que un anuncio sea `promo` o `publicidad` no cambia que se excluya.
+    prioridad: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=5)
+    # Fraccion de palabras del bloque que el otro modelo pone del lado
+    # contrario (0-1). Se guarda para poder reordenar sin recalcular, y para
+    # auditar por que un bloque quedo donde quedo.
+    desacuerdo_binario: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # Fraccion de palabras con el tipo exactamente igual (0-1).
+    porcentaje_acuerdo: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    # Trazabilidad: de que comparacion salio esta prioridad. Cabe UNA sola --
+    # una segunda comparacion (GPT-5, Claude) sobrescribe estos campos. Para
+    # acumular varias hace falta una tabla hija; se agrega cuando exista el
+    # segundo comparado, no antes.
+    modelo_base: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    modelo_comparado: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    version_comparacion: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     # Bloqueo por validador, mismo patron que `Noticia.asignado_a` (FR-051):
     # mientras alguien tiene el bloque asignado, no se le entrega a nadie mas.

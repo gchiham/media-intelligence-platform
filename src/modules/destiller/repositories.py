@@ -45,7 +45,16 @@ class ValidacionRepository:
             .where(BloqueValidacion.modelo == modelo)
             .where(BloqueValidacion.id.notin_(ya_opino))
             .where(libre | (BloqueValidacion.asignado_a == validador))
-            .order_by(BloqueValidacion.grabacion_ref, BloqueValidacion.bloque_idx)
+            # Primero lo mas informativo: donde los modelos discrepan. Dentro
+            # de cada nivel, mayor desacuerdo primero. `grabacion_ref` y
+            # `bloque_idx` al final solo desempatan, para que el orden sea
+            # estable entre corridas.
+            .order_by(
+                BloqueValidacion.prioridad,
+                BloqueValidacion.desacuerdo_binario.desc(),
+                BloqueValidacion.grabacion_ref,
+                BloqueValidacion.bloque_idx,
+            )
             .limit(limite)
             .with_for_update(skip_locked=True)
         )
