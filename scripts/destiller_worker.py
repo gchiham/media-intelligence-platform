@@ -50,6 +50,25 @@ def main() -> None:
     parser.add_argument("--rehacer", action="store_true", help="reprocesa lo ya destilado")
     parser.add_argument("--etiqueta", help="subcarpeta en S3; por defecto, el slug del modelo")
     parser.add_argument(
+        "--seleccion",
+        default=f"{PREFIJO}/seleccion.json",
+        help="llave S3 de la lista de grabaciones a destilar",
+    )
+    parser.add_argument(
+        "--destino",
+        default=f"{PREFIJO}/destilado",
+        help="prefijo S3 donde escribir; la etiqueta del modelo va como subcarpeta",
+    )
+    parser.add_argument(
+        "--particion",
+        default="0/1",
+        metavar="i/n",
+        help="reparte la lista entre n instancias; esta procesa la particion i. "
+        "Sin esto, varias instancias sobre la misma lista se duplican el trabajo: "
+        "el salto por `head_object` solo evita reprocesar lo YA escrito, no que dos "
+        "arranquen a la vez por la misma grabacion.",
+    )
+    parser.add_argument(
         "--modelo",
         help="pisa el modelo configurado. Todo lo demas -- prompt, esquema, chunking, "
         "parametros -- queda igual, que es lo que hace comparables las corridas.",
@@ -74,15 +93,17 @@ def main() -> None:
     s3 = boto3.client("s3", region_name=settings.aws_region)
     bucket = settings.transcribe_output_bucket
 
-    seleccion = json.loads(
-        s3.get_object(Bucket=bucket, Key=f"{PREFIJO}/seleccion.json")["Body"].read()
-    )
-    print(f"{len(seleccion)} grabaciones | modelo {modelo} | etiqueta {etiqueta}", flush=True)
+    seleccion = json.loads(s3.get_object(Bucket=bucket, Key=args.seleccion)["Body"].read())
+    i_part, n_part = (int(x) for x in args.particion.split("/"))
+    if n_part > 1:
+        seleccion = [c for k, c in enumerate(seleccion) if k % n_part == i_part]
+    print(f"{len(seleccion)} grabaciones (particion {args.particion}) | modelo {modelo} "
+          f"| etiqueta {etiqueta}", flush=True)
     t0 = time.monotonic()
 
     for i, c in enumerate(seleccion, 1):
         cid = f"{c['medio']}__{c['stem']}"
-        destino = f"{PREFIJO}/destilado/{etiqueta}/{cid}.json"
+        destino = f"{args.destino}/{etiqueta}/{cid}.json"
 
         if not args.rehacer:
             try:
