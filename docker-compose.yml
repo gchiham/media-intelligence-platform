@@ -98,6 +98,7 @@ services:
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./logs/nginx:/var/log/nginx
+      - /home/ubuntu/kronos-signal/dist:/usr/share/kronos:ro
     depends_on:
       backend:
         condition: service_healthy
