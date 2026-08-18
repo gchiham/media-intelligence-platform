@@ -12,6 +12,7 @@ o se persiste todo o no se persiste nada de eso, sin dejar noticias a medias.
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.application.orchestrator import MediaProcessingOrchestrator, ProcessAudioJob
@@ -43,11 +44,38 @@ class PipelineRunService:
         self._clip_storage = clip_storage
 
     def run(self, grabacion_id: uuid.UUID, job: ProcessAudioJob) -> PipelineRun:
+        # Serializa ejecuciones concurrentes de la MISMA grabacion. Sin esto,
+        # dos llamadas simultaneas (reintento del cliente tras timeout, dos
+        # shards que se pisan) pasaban ambas el check de idempotencia -- que
+        # solo mira runs COMPLETADO, y el otro estaba EN_PROGRESO -- y
+        # generaban el doble de Noticia/NoticiaVersion.
+        #
+        # Advisory lock DE SESION (no de transaccion): run() commitea a mitad
+        # de camino (EN_PROGRESO se persiste de inmediato, NFR-012), y un lock
+        # transaccional se soltaria justo ahi. El de sesion vive en la conexion
+        # hasta el unlock del finally. La segunda llamada bloquea hasta que la
+        # primera termina, y entonces ve el COMPLETADO y lo devuelve tal cual.
+        self._session.execute(
+            text("SELECT pg_advisory_lock(hashtext(:gid))"), {"gid": str(grabacion_id)}
+        )
+        try:
+            return self._run_con_lock(grabacion_id, job)
+        finally:
+            try:
+                self._session.execute(
+                    text("SELECT pg_advisory_unlock(hashtext(:gid))"), {"gid": str(grabacion_id)}
+                )
+            except Exception:  # noqa: BLE001 -- conexion muerta: el lock murio con ella
+                pass
+
+    def _run_con_lock(self, grabacion_id: uuid.UUID, job: ProcessAudioJob) -> PipelineRun:
         # Idempotencia (docs/INGESTION_DESIGN.md, punto 6): si esta Grabacion
         # ya tiene un PipelineRun COMPLETADO, devolverlo tal cual en vez de
         # correr el pipeline de nuevo -- evita Noticia/NoticiaVersion
         # duplicadas si el endpoint se llama dos veces para la misma
-        # grabacion (reintento del cliente, doble click, etc.).
+        # grabacion (reintento del cliente, doble click, etc.). El check corre
+        # DENTRO del advisory lock: es lo que lo vuelve efectivo contra
+        # concurrencia, no solo contra llamadas secuenciales.
         existing = self._pipeline_runs.get_completado_by_grabacion_id(grabacion_id)
         if existing is not None:
             return existing

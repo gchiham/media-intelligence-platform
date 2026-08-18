@@ -1220,6 +1220,21 @@ def _escribir_docx(ruta: str, cuerpo: str, pie: str) -> None:
         z.writestr("word/footer1.xml", footer)
 
 
+def _parse_utc(valor: str, flag: str) -> datetime:
+    """Rechaza fechas sin zona horaria. Un naive se colaba con DOS
+    interpretaciones distintas en el mismo informe: el WHERE contra timestamptz
+    lo leia en la TZ de la sesion de Postgres (UTC) y el encabezado lo
+    formateaba en la TZ de la maquina (GMT-6 en Windows) -- el informe
+    declaraba una franja y los datos eran otra, corridos 6 horas."""
+    dt = datetime.fromisoformat(valor.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        raise SystemExit(
+            f"{flag} {valor!r} no tiene zona horaria -- usa Z u offset explicito "
+            f"(ej. {valor}Z para UTC, {valor}-06:00 para hora de Honduras)"
+        )
+    return dt
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--cliente", required=True)
@@ -1235,8 +1250,8 @@ def main() -> None:
     p.add_argument("--sin-analisis", action="store_true")
     a = p.parse_args()
 
-    desde = datetime.fromisoformat(a.desde.replace("Z", "+00:00"))
-    hasta = datetime.fromisoformat(a.hasta.replace("Z", "+00:00"))
+    desde = _parse_utc(a.desde, "--desde")
+    hasta = _parse_utc(a.hasta, "--hasta")
     patrones = [x.strip() for x in a.patrones.split(",") if x.strip()]
     temas = {}
     for spec in a.tema:

@@ -31,6 +31,48 @@ _MAX_ATTEMPTS = 3
 _BACKOFF_SECONDS = [1, 2]  # espera antes del intento 2 y del intento 3
 
 
+def build_request_body(chunk: list[Word], model: str) -> dict:
+    """Cuerpo de una llamada de segmentacion a /v1/chat/completions, sin
+    ejecutarla.
+
+    Existe como funcion aparte por la misma razon que
+    `anthropic_provider.build_request_params`: el camino sincronico
+    (`OpenAIAnalysisProvider`, usado por POST /pipeline/process) y la Batch
+    API (usada para el backlog, ver src/modules/ai/openai_batch.py) tienen que
+    mandar exactamente lo mismo, o el dia que cambie el prompt/schema el
+    backlog se segmentaria con reglas distintas al camino interactivo."""
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": _render_chunk(chunk)},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "news_segments",
+                "schema": _RESPONSE_SCHEMA,
+                "strict": True,
+            },
+        },
+    }
+
+
+def parse_segments(raw: dict, lo: int, hi: int) -> list[NewsSegment]:
+    """Valida la respuesta cruda del LLM contra el rango de palabras que
+    realmente vio. Compartido entre el camino sincronico y el batch."""
+    segments = []
+    for item in raw["news"]:
+        item["keywords"] = item.get("keywords", [])[:MAX_KEYWORDS]
+        seg = NewsSegment.model_validate(item)
+        # Descarta rangos que el modelo se haya inventado fuera del chunk
+        # que realmente vio, o invertidos.
+        if not (lo <= seg.start_word <= seg.end_word <= hi):
+            continue
+        segments.append(seg)
+    return segments
+
+
 class OpenAIAnalysisProvider(AIAnalysisProvider):
     def __init__(self, api_key: str, model: str = "gpt-4o-mini", chunk_size: int = 600):
         self._client = OpenAI(api_key=api_key)
@@ -48,36 +90,14 @@ class OpenAIAnalysisProvider(AIAnalysisProvider):
     def _segment_chunk(self, chunk: list[Word]) -> list[NewsSegment]:
         lo, hi = chunk[0].index, chunk[-1].index
         raw = self._call_with_retry(chunk)
-
-        segments = []
-        for item in raw["news"]:
-            item["keywords"] = item.get("keywords", [])[:MAX_KEYWORDS]
-            seg = NewsSegment.model_validate(item)
-            # Descarta rangos que el modelo se haya inventado fuera del chunk
-            # que realmente vio, o invertidos.
-            if not (lo <= seg.start_word <= seg.end_word <= hi):
-                continue
-            segments.append(seg)
-        return segments
+        return parse_segments(raw, lo, hi)
 
     def _call_with_retry(self, chunk: list[Word]) -> dict:
         last_error: TransientPipelineError | None = None
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 response = self._client.chat.completions.create(
-                    model=self._model,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": _render_chunk(chunk)},
-                    ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "news_segments",
-                            "schema": _RESPONSE_SCHEMA,
-                            "strict": True,
-                        },
-                    },
+                    **build_request_body(chunk, self._model)
                 )
                 return json.loads(response.choices[0].message.content)
             except Exception as exc:

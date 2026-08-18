@@ -36,7 +36,13 @@ DLQ_URL = os.environ.get("DLQ_URL", QUEUE_URL + "-dlq")
 # Cola que consume TranscriptionResultConsumer en el backend (CPU, con
 # Postgres) -- chepita nunca escribe a la DB directamente, solo publica aca
 # despues de subir el resultado a S3. Ver docs/INGESTION_DESIGN.md.
-DONE_QUEUE_URL = os.environ.get("DONE_QUEUE_URL")
+#
+# OBLIGATORIA (fail-fast). Cuando era opcional, lanzar una flota sin esta env
+# var reproducia en silencio el incidente del AMI v1.0.0: todo se transcribe y
+# sube a S3 pero ninguna Grabacion sale de PROCESANDO, sin un solo error
+# visible (docs/INGESTION_DESIGN.md). Un KeyError al arrancar es infinitamente
+# mas barato que descubrirlo horas despues en Postgres.
+DONE_QUEUE_URL = os.environ["DONE_QUEUE_URL"]
 WORKER_ID = os.environ.get("WORKER_ID", "w0")
 # large-v3-turbo, no small -- ver docs/EFFICIENCY_REVIEW.md §5 (calidad de
 # nombres propios). Si una instancia arranca sin los pesos en cache, el primer
@@ -203,10 +209,16 @@ while idle_rounds < 3:
     processed += 1
     log(f"DONE {station} elapsed={elapsed:.1f}s")
 
-    sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
-
+    # ORDEN CRITICO: publicar el done ANTES de borrar el job de la cola.
+    # Al reves, un crash o error de red entre el delete y el send dejaba la
+    # Grabacion en PROCESANDO para siempre con el resultado ya en S3 (la clase
+    # de huerfanos que obligo al backfill manual, docs/INGESTION_DESIGN.md).
+    # En este orden el peor caso es el opuesto y benigno: done publicado pero
+    # job no borrado -> otro worker retranscribe -> el consumer, idempotente
+    # por unique(grabacion_id), descarta el duplicado. Se paga GPU de mas una
+    # vez; nunca se pierde una grabacion.
     grabacion_id = job.get("grabacion_id")
-    if DONE_QUEUE_URL and grabacion_id:
+    if grabacion_id:
         done_event = {
             "grabacion_id": grabacion_id,
             "station": station,
@@ -220,9 +232,19 @@ while idle_rounds < 3:
             "started_at": started_at,
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        sqs.send_message(QueueUrl=DONE_QUEUE_URL, MessageBody=json.dumps(done_event, ensure_ascii=False))
-    elif not grabacion_id:
+        try:
+            sqs.send_message(QueueUrl=DONE_QUEUE_URL, MessageBody=json.dumps(done_event, ensure_ascii=False))
+        except Exception as exc:  # noqa: BLE001
+            # No borrar el job: reaparece tras el visibility timeout y se
+            # retranscribe; el done del reintento si llegara a publicarse.
+            log(f"WARN {station} fallo publicando done ({type(exc).__name__}) -- "
+                f"el job se deja en cola para reintento")
+            failed += 1
+            continue
+    else:
         log(f"WARN {station} job sin grabacion_id -- no se publica evento done (job legado sin ingesta)")
+
+    sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
 
 stop_event.set()
 log(f"cola vacia, saliendo. total procesados por este worker: {processed}, fallidos: {failed}, "

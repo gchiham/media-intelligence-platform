@@ -92,52 +92,98 @@ class TranscriptionResultConsumer:
             if not messages:
                 break
             for msg in messages:
-                body = json.loads(msg["Body"])
-                grabacion_id = body.get("grabacion_id")
-                if not grabacion_id:
-                    sin_id += 1
-                    logger.error("mensaje sin grabacion_id, se descarta", extra={"extra_fields": {"body": body}})
-                    self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-                    continue
-
-                if self._transcripciones.get_by_grabacion_id(grabacion_id) is not None:
-                    omitidos += 1
-                    self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-                    continue
-
-                words = _download_json(self._s3, body["words_json_s3_uri"])
-
-                grabacion = self._grabaciones.get_by_id(grabacion_id)
-                if grabacion is None:
+                # Un mensaje que reviente NO debe abortar la corrida entera:
+                # sin este try, un body malformado o un _words.json borrado de
+                # S3 se vuelve un mensaje envenenado -- cada tick del cron
+                # procesa hasta toparselo, muere, y el resto de la cola (y la
+                # DLQ, que se consume despues en el mismo main) queda sin
+                # drenar hasta que el retention de SQS lo evapore.
+                try:
+                    procesados_delta, omitidos_delta, sin_id_delta = self._procesar_mensaje(msg)
+                    procesados += procesados_delta
+                    omitidos += omitidos_delta
+                    sin_id += sin_id_delta
+                except json.JSONDecodeError:
+                    # Body irrecuperable: reintentar no lo va a arreglar.
                     logger.error(
-                        "grabacion_id del mensaje no existe en Postgres",
-                        extra={"extra_fields": {"grabacion_id": str(grabacion_id)}},
+                        "body no es JSON, se descarta",
+                        extra={"extra_fields": {"body": msg.get("Body", "")[:500]}},
                     )
                     self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-                    continue
-
-                transcripcion = Transcripcion(
-                    grabacion_id=grabacion.id,
-                    texto_completo=" ".join(w["word"] for w in words),
-                    segmentos={"words": words},
-                    proveedor=self._provider_name,
-                )
-                self._transcripciones.add(transcripcion)
-                grabacion.estado = EstadoGrabacion.PROCESADA
-                self._grabaciones.commit()
-
-                self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
-                procesados += 1
+                except Exception:  # noqa: BLE001 -- S3 caido, DB caida: transitorio
+                    # NO se borra el mensaje: reaparece tras el visibility
+                    # timeout y se reintenta. Solo se pierde si el error
+                    # persiste hasta agotar el retention.
+                    logger.exception(
+                        "fallo procesando mensaje de resultado, se reintentara",
+                        extra={"extra_fields": {"body": msg.get("Body", "")[:500]}},
+                    )
 
         return ConsumeResult(procesados=procesados, omitidos_ya_existian=omitidos, sin_grabacion_id=sin_id)
 
+    def _procesar_mensaje(self, msg: dict) -> tuple[int, int, int]:
+        """Procesa UN mensaje. Devuelve (procesados, omitidos, sin_id) como
+        deltas 0/1 para que consume_once acumule."""
+        body = json.loads(msg["Body"])
+        grabacion_id = body.get("grabacion_id")
+        if not grabacion_id:
+            logger.error("mensaje sin grabacion_id, se descarta", extra={"extra_fields": {"body": body}})
+            self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+            return 0, 0, 1
+
+        if self._transcripciones.get_by_grabacion_id(grabacion_id) is not None:
+            self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+            return 0, 1, 0
+
+        if "words_json_s3_uri" not in body:
+            logger.error(
+                "mensaje sin words_json_s3_uri, se descarta",
+                extra={"extra_fields": {"grabacion_id": str(grabacion_id)}},
+            )
+            self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+            return 0, 0, 1
+
+        words = _download_json(self._s3, body["words_json_s3_uri"])
+
+        grabacion = self._grabaciones.get_by_id(grabacion_id)
+        if grabacion is None:
+            logger.error(
+                "grabacion_id del mensaje no existe en Postgres",
+                extra={"extra_fields": {"grabacion_id": str(grabacion_id)}},
+            )
+            self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+            return 0, 0, 0
+
+        transcripcion = Transcripcion(
+            grabacion_id=grabacion.id,
+            texto_completo=" ".join(w["word"] for w in words),
+            segmentos={"words": words},
+            proveedor=self._provider_name,
+        )
+        self._transcripciones.add(transcripcion)
+        grabacion.estado = EstadoGrabacion.PROCESADA
+        self._grabaciones.commit()
+
+        self._sqs.delete_message(QueueUrl=self._queue_url, ReceiptHandle=msg["ReceiptHandle"])
+        return 1, 0, 0
+
 
 class TranscriptionFailureConsumer:
-    def __init__(self, grabaciones: GrabacionRepository, sqs_client, dlq_url: str, max_messages: int = 10):
+    def __init__(
+        self,
+        grabaciones: GrabacionRepository,
+        sqs_client,
+        dlq_url: str,
+        max_messages: int = 10,
+        transcripciones: TranscripcionRepository | None = None,
+    ):
         self._grabaciones = grabaciones
         self._sqs = sqs_client
         self._dlq_url = dlq_url
         self._max_messages = max_messages
+        # Opcional para no romper callers existentes; si esta, permite detectar
+        # el caso "duplicado fallido de una grabacion que ya transcribio bien".
+        self._transcripciones = transcripciones
 
     def consume_once(self) -> int:
         marcadas = 0
@@ -145,7 +191,15 @@ class TranscriptionFailureConsumer:
             QueueUrl=self._dlq_url, MaxNumberOfMessages=self._max_messages, WaitTimeSeconds=5,
         )
         for msg in resp.get("Messages", []):
-            body = json.loads(msg["Body"])
+            try:
+                body = json.loads(msg["Body"])
+            except json.JSONDecodeError:
+                logger.error(
+                    "mensaje de DLQ con body no-JSON, se descarta",
+                    extra={"extra_fields": {"body": msg.get("Body", "")[:500]}},
+                )
+                self._sqs.delete_message(QueueUrl=self._dlq_url, ReceiptHandle=msg["ReceiptHandle"])
+                continue
             original_job = body.get("original_job", body)
             error_message = (
                 json.dumps(body["error"], ensure_ascii=False)
@@ -156,16 +210,28 @@ class TranscriptionFailureConsumer:
 
             if grabacion_id:
                 grabacion = self._grabaciones.get_by_id(grabacion_id)
-                if grabacion is not None:
-                    grabacion.estado = EstadoGrabacion.ERROR
-                    grabacion.error_mensaje = error_message
-                    self._grabaciones.commit()
-                    marcadas += 1
-                else:
+                if grabacion is None:
                     logger.error(
                         "grabacion_id de la DLQ no existe en Postgres",
                         extra={"extra_fields": {"grabacion_id": str(grabacion_id)}},
                     )
+                elif (
+                    grabacion.estado == EstadoGrabacion.PROCESADA
+                    or self._transcripciones is not None
+                    and self._transcripciones.get_by_grabacion_id(grabacion_id) is not None
+                ):
+                    # SQS es at-least-once: un duplicado del job puede fallar y
+                    # caer a la DLQ DESPUES de que el original transcribio bien.
+                    # Marcar ERROR aca revertiria una grabacion valida.
+                    logger.info(
+                        "DLQ trae grabacion ya transcrita, se ignora el fallo",
+                        extra={"extra_fields": {"grabacion_id": str(grabacion_id)}},
+                    )
+                else:
+                    grabacion.estado = EstadoGrabacion.ERROR
+                    grabacion.error_mensaje = error_message
+                    self._grabaciones.commit()
+                    marcadas += 1
             else:
                 logger.error("mensaje de DLQ sin grabacion_id, no se puede marcar", extra={"extra_fields": {"body": body}})
 
