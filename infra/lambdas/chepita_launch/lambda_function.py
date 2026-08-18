@@ -1,8 +1,9 @@
-"""Lanza 1 chepita (g6.xlarge, AMI CHEPITA-L4-v1.2.0) y arranca sus 3 workers.
+"""Lanza 1 chepita (g6.xlarge, AMI CHEPITA-L4-v1.3.0) y arranca sus 3 workers.
 
 Disparado por 4 reglas de EventBridge (10am/3pm/8pm/11pm GMT-6). No espera a
-que termine el trabajo -- eso lo decide `terminate_idle`, que corre aparte
-cada 5 min y apaga la instancia cuando la cola de SQS queda vacia.
+que termine el trabajo -- eso lo decide `chepita_supervisor`, que corre aparte
+cada 5 min: apaga la instancia cuando la cola queda vacia, o le relanza los
+workers si murieron con trabajo pendiente.
 
 Sin `--subnet-id`: dejar que AWS elija la AZ evita el `InsufficientInstanceCapacity`
 que da lanzar contra una AZ fija (ver docs/INFRASTRUCTURE.md). Aun asi se
@@ -16,7 +17,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 REGION = "us-east-1"
-AMI_ID = "ami-02c05ccbd6699df41"  # CHEPITA-L4-v1.2.0
+AMI_ID = "ami-0333472587024212a"  # CHEPITA-L4-v1.3.0
 INSTANCE_TYPE = "g6.xlarge"
 IAM_PROFILE = "media-intel-ec2-transcribe"
 SECURITY_GROUP = "sg-033ac2dd79d76f56a"
