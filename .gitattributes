@@ -1,0 +1,9 @@
+# El supervisor de chepita embebe un script de shell dentro de un string de
+# Python y lo manda a la instancia por SSM. Si el archivo se materializa con
+# CRLF en un checkout de Windows, ese script llega con \r y muere con
+# "syntax error near unexpected token" -- ver infra/lambdas/README.md.
+infra/lambdas/**/*.py text eol=lf
+
+# Mismo motivo: scripts que se despliegan al contenedor Linux o se ejecutan alla.
+scripts/*.py text eol=lf
+*.sh text eol=lf
