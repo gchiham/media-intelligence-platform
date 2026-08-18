@@ -20,3 +20,15 @@ postgres_backups/
 # Archivos de trabajo temporales de sesiones (dumps de DB, exports, scratch).
 # Nunca deben commitearse: pueden contener datos reales de produccion.
 scratchpad/
+
+# Salidas de corridas ad-hoc en el servidor (ab_test_output.log, batch_run*.log)
+# y los backups que deja editar la config a mano antes de un cambio. Aparecian
+# como pendientes en `git status` del servidor y ensuciaban el diagnostico de
+# que era codigo real sin subir.
+/*.log
+*.bak-*
+
+# Override de compose especifico de cada maquina -- hoy apunta el backend al
+# RDS en el servidor de produccion (ver docs/INFRASTRUCTURE.md). No se versiona
+# porque cada entorno tiene el suyo y lleva credenciales por variable.
+docker-compose.override.yml
