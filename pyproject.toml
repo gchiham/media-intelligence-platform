@@ -20,6 +20,10 @@ dependencies = [
     "defusedxml>=0.7",
     "openai>=1.50",
     "anthropic>=0.40",
+    # Userbot de Telegram (scripts/telegram_pdf_watcher.py) -- lee canales
+    # publicos de terceros donde no tenemos rol de admin, asi que el Bot API
+    # no sirve (solo recibe channel_post si el bot es admin del canal).
+    "telethon>=1.36",
 ]
 
 [project.optional-dependencies]
