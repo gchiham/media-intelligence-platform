@@ -22,6 +22,7 @@ from src.infrastructure.config import settings
 from src.infrastructure.db.engine import get_engine
 from src.modules.ai.providers.openai_provider import OpenAIAnalysisProvider
 from src.modules.editorial.repositories import NoticiaRepository, NoticiaVersionRepository
+from src.modules.prensa.repositories import ArticuloRepository
 from src.modules.editorial.services import NoticiaService
 from src.modules.pipeline.repositories import PipelineRunRepository
 from src.modules.pipeline.resolvers import (
@@ -56,6 +57,12 @@ def get_noticia_repository(session: Session = Depends(get_db_session)) -> Notici
     """Solo para lecturas que no son una operacion de negocio (ej. listar la
     cola) -- las escrituras siempre pasan por NoticiaService, nunca por aqui."""
     return NoticiaRepository(session)
+
+
+def get_articulo_repository(session: Session = Depends(get_db_session)) -> ArticuloRepository:
+    """Solo lectura, para la seccion Prensa Digital del portal. Las escrituras
+    las hace IngestaPrensaService desde el cron, nunca la API."""
+    return ArticuloRepository(session)
 
 
 def get_noticia_version_repository(session: Session = Depends(get_db_session)) -> NoticiaVersionRepository:

@@ -12,6 +12,7 @@ from src.modules.destiller import models as destiller_models  # noqa: F401
 from src.modules.editorial import models as editorial_models  # noqa: F401
 from src.modules.media import models as media_models  # noqa: F401
 from src.modules.pipeline import models as pipeline_models  # noqa: F401
+from src.modules.prensa import models as prensa_models  # noqa: F401
 from src.modules.recordings import models as recordings_models  # noqa: F401
 from src.modules.reports import models as reports_models  # noqa: F401
 from src.shared import audit as audit_models  # noqa: F401

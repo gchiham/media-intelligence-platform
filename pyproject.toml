@@ -15,6 +15,9 @@ dependencies = [
     "python-jose[cryptography]>=3.3",
     "pwdlib[argon2]>=0.2",
     "uuid6>=2024.7.10",
+    # Los feeds RSS/sitemap son XML de terceros: ElementTree pelado es
+    # vulnerable a billion-laughs. Ver src/modules/prensa/feeds.py.
+    "defusedxml>=0.7",
     "openai>=1.50",
     "anthropic>=0.40",
 ]

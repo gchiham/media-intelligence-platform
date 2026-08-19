@@ -144,6 +144,14 @@ Página HTML de solo lectura con **todas** las noticias (cualquier estado, no so
 
 **No es autenticación de usuario** — protegido por un token compartido en la query string (`?token=...`), comparado contra `settings.dashboard_token` (`DASHBOARD_TOKEN` en `.env`). Si `DASHBOARD_TOKEN` no está configurado, o el token no coincide, responde `404` (no `401`/`403` — evita confirmar que el endpoint existe a quien no tiene el token).
 
+### `GET /api/v1/prensa/dashboard`
+
+Sección **Prensa Digital** del portal: página HTML de solo lectura con los artículos que la ingesta de RSS/sitemaps trae de los medios web (ver `docs/PRENSA_DIGITAL.md`), más reciente primero, con pestañas por medio y filtro por texto. Cada tarjeta enlaza a la nota original en el sitio del medio; los que vienen de sitemap se marcan como "solo titular" porque esa fuente no trae cuerpo.
+
+Es una página **aparte** del dashboard de noticias, no una pestaña: un `Articulo` no tiene estado editorial, ni clip de audio, ni transcripción. Las dos páginas se enlazan entre sí.
+
+Mismo esquema de protección que `/news/dashboard`: `?token=` comparado contra `DASHBOARD_TOKEN`, `404` si no coincide. Parámetro opcional `limite` (default 500).
+
 ### `GET /api/v1/news/{news_id}/clip` (soporte de `/dashboard`, no se usa suelto)
 
 Redirige (`307`) a una URL presignada de S3 (`ExpiresIn=3600`) para el clip de audio de esa noticia (`Noticia.clip_s3_uri`) — el bucket de clips es privado, así que el `<audio src>` del dashboard no puede apuntar directo a él. Misma protección por `token` que `/dashboard`. `include_in_schema=False` — no aparece en `/docs`.

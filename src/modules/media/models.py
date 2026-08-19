@@ -10,6 +10,11 @@ from src.infrastructure.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class TipoMedio(str, enum.Enum):
     RADIO = "radio"
     TV = "tv"
+    # Medio nativo de web (Proceso, Criterio, ContraCorriente...): no lo captura
+    # mediaCAP, entra por RSS/sitemap. Los medios que ademas emiten al aire
+    # (HCH, Canal 11, Radio America) siguen siendo radio/tv y cuelgan su feed
+    # del mismo Medio -- ver src/modules/prensa/models.py.
+    DIGITAL = "digital"
 
 
 class Medio(Base, UUIDPrimaryKeyMixin, TimestampMixin):
