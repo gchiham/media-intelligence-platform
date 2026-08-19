@@ -62,14 +62,21 @@ def _dashboard_row_html(row: dict) -> str:
     titulo = html.escape(row["titulo"] or "(sin titulo)")
     estado = row["estado"] or ""
     color = _ESTADO_COLORS.get(estado, "#9ca3af")
+    medio = row["medio_nombre"] or "-"
+    medio_esc = html.escape(medio)
     created = row["created_at"]
-    created_str = created.astimezone(GMT6).strftime("%Y-%m-%d %H:%M:%S") if created else "-"
+    created_local = created.astimezone(GMT6) if created else None
+    created_str = created_local.strftime("%Y-%m-%d %H:%M:%S") if created_local else "-"
+    # Fecha (solo dia, GMT-6) legible por el filtro JS -- el rango de fechas del
+    # dashboard usa el "dia de Honduras", igual que la hora que se muestra.
+    created_date = created_local.strftime("%Y-%m-%d") if created_local else ""
 
     return f"""
-    <details class="row" data-id="{row["id"]}" data-medio="{html.escape(row["medio_nombre"] or "-")}">
+    <details class="row" data-id="{row["id"]}" data-medio="{medio_esc}" data-date="{created_date}">
       <summary>
         <span class="badge" style="background:{color}">{html.escape(estado)}</span>
         <span class="titulo">{titulo}</span>
+        <span class="medio">{medio_esc}</span>
         <span class="date">{created_str}</span>
       </summary>
       <div class="row-body"><p class="loading">Cargando...</p></div>
@@ -176,6 +183,39 @@ _DASHBOARD_PAGE = """<!doctype html>
   .search button:hover {{ background: #4b5568; }}
   .search .clear {{ background: transparent; border: 1px solid #232b36; color: #9ca3af; display: none; }}
   .search-status {{ color: #6b7280; font-size: 0.78rem; margin: 8px 0 0; min-height: 1.1em; }}
+  .filters {{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0 0;
+    font-size: 0.8rem;
+    color: #9ca3af;
+  }}
+  .filters label {{ display: flex; align-items: center; gap: 6px; }}
+  .filters input[type="date"] {{
+    background: #131922;
+    border: 1px solid #232b36;
+    color: #e5e7eb;
+    font-size: 0.82rem;
+    padding: 6px 10px;
+    border-radius: 8px;
+    outline: none;
+    color-scheme: dark;
+  }}
+  .filters input[type="date"]:focus {{ border-color: #3b4454; }}
+  .filters .clear-date {{
+    background: transparent;
+    border: 1px solid #232b36;
+    color: #9ca3af;
+    font-size: 0.8rem;
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: none;
+  }}
+  .filters .clear-date:hover {{ background: #182130; }}
+  #date-status {{ color: #6b7280; font-size: 0.78rem; }}
   .tabs {{
     position: sticky;
     top: 0;
@@ -236,7 +276,25 @@ _DASHBOARD_PAGE = """<!doctype html>
     text-overflow: ellipsis;
     white-space: nowrap;
   }}
+  .medio {{
+    flex: none;
+    color: #cbd5e1;
+    background: #1f2937;
+    border: 1px solid #2b3543;
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    max-width: 130px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }}
   .date {{ flex: none; color: #6b7280; font-size: 0.75rem; }}
+  /* En pantallas angostas la hora se oculta para que el medio + titulo quepan */
+  @media (max-width: 560px) {{
+    .date {{ display: none; }}
+    .medio {{ max-width: 100px; }}
+  }}
   .row-body {{ padding: 4px 14px 14px; border-top: 1px solid #1c2532; }}
   .loading {{ color: #6b7280; font-size: 0.85rem; margin: 10px 0; }}
   .meta {{ color: #9ca3af; font-size: 0.8rem; margin: 10px 0 8px; }}
@@ -281,6 +339,12 @@ _DASHBOARD_PAGE = """<!doctype html>
     <button id="search-clear" class="clear">Limpiar</button>
   </div>
   <p class="search-status" id="search-status"></p>
+  <div class="filters">
+    <label>Desde <input type="date" id="date-from"></label>
+    <label>Hasta <input type="date" id="date-to"></label>
+    <button id="date-clear" class="clear-date">Limpiar fechas</button>
+    <span id="date-status"></span>
+  </div>
   <div class="tabs" id="tabs">
     {tabs}
   </div>
@@ -299,16 +363,48 @@ _DASHBOARD_PAGE = """<!doctype html>
       var searchClear = document.getElementById('search-clear');
       var searchStatus = document.getElementById('search-status');
       var tabsBar = document.getElementById('tabs');
+      var dateFrom = document.getElementById('date-from');
+      var dateTo = document.getElementById('date-to');
+      var dateClear = document.getElementById('date-clear');
+      var dateStatus = document.getElementById('date-status');
+
+      // Estado de los filtros. La visibilidad de cada fila sale de combinar los
+      // tres: medio (tabs), rango de fechas (data-date, GMT-6) y busqueda.
+      var activeMedio = '__all__';
+      var searchIds = null;  // null = no hay busqueda activa; si no, mapa id->true
+
+      function applyFilters() {{
+        var from = dateFrom.value;  // '' o 'YYYY-MM-DD'; comparacion lexica sirve
+        var to = dateTo.value;
+        var visible = 0;
+        rows.forEach(function(row) {{
+          var show = true;
+          if (searchIds) {{
+            if (!searchIds[row.getAttribute('data-id')]) show = false;
+          }} else if (activeMedio !== '__all__' && row.getAttribute('data-medio') !== activeMedio) {{
+            show = false;
+          }}
+          var d = row.getAttribute('data-date');
+          if (from && (!d || d < from)) show = false;
+          if (to && (!d || d > to)) show = false;
+          row.classList.toggle('hidden', !show);
+          if (show) visible++;
+        }});
+        if (from || to) {{
+          dateStatus.textContent = visible + ' en el rango';
+          dateClear.style.display = 'inline-block';
+        }} else {{
+          dateStatus.textContent = '';
+          dateClear.style.display = 'none';
+        }}
+      }}
 
       tabs.forEach(function(tab) {{
         tab.addEventListener('click', function() {{
           tabs.forEach(function(t) {{ t.classList.remove('active'); }});
           tab.classList.add('active');
-          var medio = tab.getAttribute('data-medio');
-          rows.forEach(function(row) {{
-            var show = medio === '__all__' || row.getAttribute('data-medio') === medio;
-            row.classList.toggle('hidden', !show);
-          }});
+          activeMedio = tab.getAttribute('data-medio');
+          applyFilters();
         }});
       }});
 
@@ -341,13 +437,11 @@ _DASHBOARD_PAGE = """<!doctype html>
             return r.json();
           }})
           .then(function(data) {{
-            var ids = {{}};
-            data.results.forEach(function(r) {{ ids[r.id] = true; }});
-            rows.forEach(function(row) {{
-              row.classList.toggle('hidden', !ids[row.getAttribute('data-id')]);
-            }});
+            searchIds = {{}};
+            data.results.forEach(function(r) {{ searchIds[r.id] = true; }});
             tabsBar.style.display = 'none';
             searchClear.style.display = 'inline-block';
+            applyFilters();
             var suffix = data.expandido ? ' (busqueda ampliada con variantes/alias)' : '';
             searchStatus.textContent = data.count + ' resultado(s) para "' + data.query + '"' + suffix;
           }})
@@ -360,17 +454,27 @@ _DASHBOARD_PAGE = """<!doctype html>
       function clearSearch() {{
         searchInput.value = '';
         searchStatus.textContent = '';
+        searchIds = null;
         originalOrder.forEach(function(el) {{ rowsContainer.appendChild(el); }});
         tabsBar.style.display = '';
         searchClear.style.display = 'none';
         var activeTab = document.querySelector('.tab.active') || tabs[0];
-        activeTab.click();
+        activeMedio = activeTab.getAttribute('data-medio');
+        applyFilters();
       }}
 
       searchBtn.addEventListener('click', runSearch);
       searchClear.addEventListener('click', clearSearch);
       searchInput.addEventListener('keydown', function(e) {{
         if (e.key === 'Enter') runSearch();
+      }});
+
+      dateFrom.addEventListener('change', applyFilters);
+      dateTo.addEventListener('change', applyFilters);
+      dateClear.addEventListener('click', function() {{
+        dateFrom.value = '';
+        dateTo.value = '';
+        applyFilters();
       }});
     }})();
   </script>

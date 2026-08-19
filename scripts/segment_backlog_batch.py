@@ -160,6 +160,12 @@ def collect() -> None:
 
             guardadas = 0
             for grabacion_id, segmentos in resultados.por_grabacion.items():
+                # Una grabacion con chunks fallidos NO se cachea: quedaria
+                # incompleta para siempre (indistinguible de "sin noticias") y
+                # jamas se reintentaria, porque el submit excluye ya-cacheadas.
+                # Al saltarla, el proximo --submit la vuelve a mandar entera.
+                if grabacion_id in resultados.grabaciones_con_error:
+                    continue
                 existente = session.scalar(
                     select(SegmentationCache).where(
                         SegmentationCache.grabacion_id == grabacion_id
@@ -184,6 +190,7 @@ def collect() -> None:
 
             print(
                 f"{batch.anthropic_batch_id}: {guardadas} grabaciones cacheadas, "
+                f"{len(resultados.grabaciones_con_error)} con error se reintentaran, "
                 f"{len(resultados.errores)} chunks con error, {resultados.expirados} expirados"
             )
 

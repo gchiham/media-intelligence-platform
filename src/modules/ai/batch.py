@@ -74,6 +74,12 @@ class BatchResults:
     por_grabacion: dict[str, list[NewsSegment]] = field(default_factory=dict)
     errores: list[str] = field(default_factory=list)
     expirados: int = 0
+    # Grabaciones con AL MENOS un chunk fallido (expirado, error de API, JSON
+    # malformado). Sus segmentos parciales quedan en `por_grabacion` igual,
+    # pero quien cachea debe saltarselas: cachear un resultado incompleto lo
+    # vuelve permanente e indistinguible de "esa hora no tenia noticias" --
+    # la grabacion nunca se reintenta porque el submit excluye ya-cacheadas.
+    grabaciones_con_error: set[str] = field(default_factory=set)
 
 
 def build_chunk_requests(
@@ -143,14 +149,17 @@ class BatchSegmentationClient:
             if tipo == "expired":
                 salida.expirados += 1
                 salida.errores.append(f"{custom_id}: expirado")
+                salida.grabaciones_con_error.add(grabacion_id)
                 continue
             if tipo != "succeeded":
                 salida.errores.append(f"{custom_id}: {tipo}")
+                salida.grabaciones_con_error.add(grabacion_id)
                 continue
 
             raw = self._extract_tool_input(entrada.result.message)
             if raw is None:
                 salida.errores.append(f"{custom_id}: sin tool call valida")
+                salida.grabaciones_con_error.add(grabacion_id)
                 continue
 
             lo, hi = rangos.get(custom_id, (0, 10**9))
@@ -158,6 +167,7 @@ class BatchSegmentationClient:
                 salida.por_grabacion[grabacion_id].extend(parse_segments(raw, lo, hi))
             except Exception as exc:  # noqa: BLE001 -- un chunk malformado no tumba el resto
                 salida.errores.append(f"{custom_id}: {exc}")
+                salida.grabaciones_con_error.add(grabacion_id)
 
         return salida
 

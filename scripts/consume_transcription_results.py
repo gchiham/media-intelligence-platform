@@ -48,7 +48,12 @@ def main() -> None:
 
     with Session(get_engine()) as session:
         failure_consumer = TranscriptionFailureConsumer(
-            grabaciones=GrabacionRepository(session), sqs_client=sqs, dlq_url=settings.transcription_dlq_url,
+            grabaciones=GrabacionRepository(session),
+            sqs_client=sqs,
+            dlq_url=settings.transcription_dlq_url,
+            # Permite ignorar fallos de jobs duplicados cuya grabacion ya
+            # transcribio bien (no revertir PROCESADA -> ERROR).
+            transcripciones=TranscripcionRepository(session),
         )
         marcadas = failure_consumer.consume_once()
         print(f"grabaciones marcadas en error: {marcadas}")
