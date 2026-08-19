@@ -120,6 +120,53 @@ def _ids_pendientes(session: Session, limit: int, fecha_desde, fecha_hasta,
     return ids[:limit]
 
 
+def _reclamar_siguiente(session: Session, fecha_desde, fecha_hasta):
+    """Toma UNA grabacion pendiente y la reclama de forma atomica, o None si
+    no queda ninguna libre.
+
+    Reemplaza al sharding estatico (`--shard i --de N`) para el trabajo en
+    flota. El sharding asumia que todas las instancias ven la MISMA lista para
+    que `idx % N == i` la cubra exacto; con arranques escalonados --lo normal,
+    porque aprovisionar cada instancia tarda minutos-- cada una calculaba sus
+    indices sobre una lista que ya venia encogiendo, y quedaban huecos (paso el
+    2026-08-18: 97 grabaciones sin procesar de 244).
+
+    `FOR UPDATE SKIP LOCKED` elimina el problema de raiz: no hay lista previa
+    que repartir, cada instancia pide la siguiente libre. Sin huecos, sin
+    duplicados, y sin importar cuando arranca cada una ni cuantas sean.
+    """
+    stmt = (
+        select(SegmentationCache)
+        .join(Grabacion, Grabacion.id == SegmentationCache.grabacion_id)
+        .join(Transcripcion, Transcripcion.grabacion_id == SegmentationCache.grabacion_id)
+        .where(SegmentationCache.consumido.is_(False))
+    )
+    if fecha_desde is not None:
+        stmt = stmt.where(Grabacion.fecha_inicio >= fecha_desde)
+    if fecha_hasta is not None:
+        stmt = stmt.where(Grabacion.fecha_inicio < fecha_hasta)
+    cache = session.scalars(
+        stmt.order_by(Grabacion.fecha_inicio.desc(), Grabacion.id)
+        .limit(1)
+        .with_for_update(skip_locked=True, of=SegmentationCache)
+    ).first()
+    return cache.grabacion_id if cache else None
+
+
+def _iter_reclamadas(session: Session, limit: int, fecha_desde, fecha_hasta):
+    """Generador que va reclamando grabaciones de a una hasta agotar el
+    backlog o el limite. La fila queda bloqueada hasta el commit que hace
+    `procesar_una` al final de cada grabacion, asi que otra instancia no puede
+    tomarla mientras se le cortan los clips."""
+    entregadas = 0
+    while entregadas < limit:
+        gid = _reclamar_siguiente(session, fecha_desde, fecha_hasta)
+        if gid is None:
+            return
+        entregadas += 1
+        yield gid
+
+
 def _cargar_una(session: Session, grabacion_id):
     """Las tres filas de UNA grabacion. Se llama por iteracion para que la
     memoria no crezca con el tamano del backlog."""
@@ -164,7 +211,8 @@ def _cortar_y_subir(s3, audio: Path, tmpd: Path, clave: str, run_id, segmentos: 
 
 
 def procesar(limit: int, fecha_desde, fecha_hasta, dry_run: bool,
-             con_clips: bool = False, shard: int = 0, de: int = 1) -> None:
+             con_clips: bool = False, shard: int = 0, de: int = 1,
+             reclamo: bool = False) -> None:
     s3 = None
     clips_bucket = capture_bucket = None
     if con_clips:
@@ -175,14 +223,24 @@ def procesar(limit: int, fecha_desde, fecha_hasta, dry_run: bool,
         capture_bucket = settings.capture_bucket
 
     with Session(get_engine()) as session:
-        ids = _ids_pendientes(session, limit, fecha_desde, fecha_hasta, shard, de)
-        print(f"{len(ids)} grabaciones con segmentos cacheados sin consumir"
-              + (f" (shard {shard}/{de})" if de > 1 else "")
-              + (" | con corte de audio" if con_clips else " | solo texto"), flush=True)
+        if reclamo:
+            # Modo flota: no hay lista previa, cada iteracion pide la siguiente
+            # libre. Se genera perezosamente para que dos instancias nunca
+            # tomen la misma ni dejen huecos.
+            pendientes_totales = len(_ids_pendientes(session, limit, fecha_desde, fecha_hasta))
+            print(f"{pendientes_totales} grabaciones pendientes en total | modo reclamo atomico"
+                  + (" | con corte de audio" if con_clips else " | solo texto"), flush=True)
+            ids = _iter_reclamadas(session, limit, fecha_desde, fecha_hasta)
+            filas = range(min(limit, pendientes_totales))
+        else:
+            ids = _ids_pendientes(session, limit, fecha_desde, fecha_hasta, shard, de)
+            print(f"{len(ids)} grabaciones con segmentos cacheados sin consumir"
+                  + (f" (shard {shard}/{de})" if de > 1 else "")
+                  + (" | con corte de audio" if con_clips else " | solo texto"), flush=True)
+            filas = ids  # solo para los mensajes de progreso
 
         total_noticias = total_sugerencias = saltadas = 0
         total_clips = procesadas = 0
-        filas = ids  # solo para los mensajes de progreso
 
         for grabacion_id in ids:
             cargada = _cargar_una(session, grabacion_id)
@@ -370,11 +428,18 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--con-clips", action="store_true",
                    help="baja el audio, corta con ffmpeg y sube el clip a S3")
-    p.add_argument("--shard", type=int, default=0)
+    p.add_argument("--shard", type=int, default=0,
+                   help="sharding estatico (legado); preferir --reclamo en flota")
     p.add_argument("--de", type=int, default=1, help="numero total de shards")
+    p.add_argument("--reclamo", action="store_true",
+                   help="toma grabaciones de a una con FOR UPDATE SKIP LOCKED en vez "
+                        "de repartir por shard -- sin huecos aunque las instancias "
+                        "arranquen escalonadas (ver docstring de _reclamar_siguiente)")
     a = p.parse_args()
+    if a.reclamo and a.de > 1:
+        raise SystemExit("--reclamo y --de son excluyentes: el reclamo ya coordina la flota")
     procesar(a.limit, _fecha(a.fecha_desde), _fecha(a.fecha_hasta), a.dry_run,
-             con_clips=a.con_clips, shard=a.shard, de=a.de)
+             con_clips=a.con_clips, shard=a.shard, de=a.de, reclamo=a.reclamo)
 
 
 if __name__ == "__main__":

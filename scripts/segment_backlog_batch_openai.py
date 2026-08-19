@@ -95,21 +95,32 @@ def _parse_fecha(valor: str | None) -> datetime | None:
     return datetime.fromisoformat(valor.replace("Z", "+00:00"))
 
 
-def _api_key() -> str:
-    """OPENAI_API_KEY se quedo sin credito (credit_balance_exhausted, visto
-    en produccion el 2026-08-13) -- OPENAI_API_KEY_2 es una cuenta/org
-    distinta con credito disponible. No es parte de Settings (pydantic
-    ignora env vars extra, igual que en scripts/filtro_joh_batch_openai.py),
-    asi que se lee directo del entorno. Un batch abierto con una key no se
-    puede consultar/recolectar con la otra (son orgs distintas) -- por eso
-    hay que terminar de recolectar todo lo abierto de la key vieja antes de
-    mandar el primer submit con la nueva."""
-    key = os.environ.get("OPENAI_API_KEY_2")
-    if key:
-        return key
-    if not settings.openai_api_key:
-        raise SystemExit("falta OPENAI_API_KEY")
-    return settings.openai_api_key.get_secret_value()
+def _key(cuenta: str) -> str | None:
+    """Devuelve la key de la cuenta pedida ("1" o "2"), o None si no existe.
+
+    Son organizaciones distintas de OpenAI, no dos keys de la misma: cada una
+    tiene su propia cuota de tokens encolados, que es lo que permite mandar
+    dos batches en paralelo y duplicar el throughput. La contra es que un
+    batch abierto con una cuenta es INVISIBLE para la otra (`retrieve` falla),
+    por eso `segmentation_batches.cuenta` registra con cual salio cada uno.
+    """
+    if cuenta == "1":
+        return settings.openai_api_key.get_secret_value() if settings.openai_api_key else None
+    if cuenta == "2":
+        env = os.environ.get("OPENAI_API_KEY_2")
+        if env:
+            return env
+        # El contenedor no siempre trae KEY_2 en el entorno; el .env del repo si.
+        ruta = Path(__file__).parent.parent / ".env"
+        if ruta.exists():
+            for linea in ruta.read_text(encoding="utf-8").splitlines():
+                if linea.strip().startswith("OPENAI_API_KEY_2="):
+                    return linea.split("=", 1)[1].strip()
+    return None
+
+
+def _cuentas_disponibles() -> list[str]:
+    return [c for c in ("1", "2") if _key(c)]
 
 
 def submit(
@@ -119,7 +130,13 @@ def submit(
     fecha_hasta: datetime | None = None,
     offset: int = 0,
 ) -> None:
-    client = OpenAIBatchSegmentationClient(OpenAI(api_key=_api_key()))
+    """Arma los chunks pendientes y los reparte entre TODAS las cuentas de
+    OpenAI disponibles, un batch por cuenta. Cada cuenta tiene su propia cuota
+    de tokens encolados, asi que dos batches en paralelo avanzan al doble de
+    velocidad que uno solo con el doble de chunks."""
+    cuentas = _cuentas_disponibles()
+    if not cuentas:
+        raise SystemExit("no hay ninguna cuenta de OpenAI configurada")
 
     with Session(get_engine()) as session:
         filas = _pendientes(session, limit, fecha_desde, fecha_hasta, offset)
@@ -158,29 +175,69 @@ def submit(
             print(f"todo el contenido candidato quedo filtrado ({saltados} chunks de publicidad)")
             return
 
-        batch_id = client.submit(peticiones)
-        session.add(
-            SegmentationBatch(
-                anthropic_batch_id=batch_id,
-                estado=EstadoSegmentationBatch.ENVIADO,
-                modelo=settings.openai_model,
-                total_requests=len(peticiones),
-                rangos={
-                    build_custom_id(p.grabacion_id, p.chunk_index): [p.lo, p.hi]
-                    for p in peticiones
-                },
+        # Reparto por GRABACION, no por chunk: los chunks de una misma
+        # grabacion tienen que volver juntos para que el stitching pueda
+        # fusionar las noticias partidas en el limite entre chunks contiguos.
+        # Partirlos entre dos cuentas los haria volver en collects distintos y
+        # las noticias del borde quedarian cortadas.
+        por_cuenta: dict[str, list] = {c: [] for c in cuentas}
+        grabaciones_vistas: list[str] = []
+        for p in peticiones:
+            if p.grabacion_id not in grabaciones_vistas:
+                grabaciones_vistas.append(p.grabacion_id)
+            idx = grabaciones_vistas.index(p.grabacion_id)
+            por_cuenta[cuentas[idx % len(cuentas)]].append(p)
+
+        enviados = []
+        for cuenta in cuentas:
+            grupo = por_cuenta[cuenta]
+            if not grupo:
+                continue
+            client = OpenAIBatchSegmentationClient(OpenAI(api_key=_key(cuenta)))
+            batch_id = client.submit(grupo)
+            session.add(
+                SegmentationBatch(
+                    anthropic_batch_id=batch_id,
+                    estado=EstadoSegmentationBatch.ENVIADO,
+                    modelo=settings.openai_model,
+                    total_requests=len(grupo),
+                    cuenta=cuenta,
+                    rangos={
+                        build_custom_id(p.grabacion_id, p.chunk_index): [p.lo, p.hi]
+                        for p in grupo
+                    },
+                )
             )
-        )
+            enviados.append((cuenta, batch_id, len(grupo)))
         session.commit()
 
+    for cuenta, batch_id, n in enviados:
+        print(f"batch enviado (cuenta {cuenta}): {batch_id} | {n} chunks")
     print(
-        f"batch enviado: {batch_id} | {len(peticiones)} chunks de {len(filas)} grabaciones"
+        f"total: {len(peticiones)} chunks de {len(filas)} grabaciones "
+        f"repartidos en {len(enviados)} batch(es)"
         + (f" | {saltados} chunks saltados por publicidad" if saltados else "")
     )
 
 
+def _cliente_de(batch: SegmentationBatch) -> OpenAI | None:
+    """El cliente de la cuenta con la que se mando ESE batch. Los batches
+    viejos no tienen `cuenta` registrada: para ellos se prueba la 1 y despues
+    la 2, que es el comportamiento que habia antes de la columna."""
+    if batch.cuenta:
+        key = _key(batch.cuenta)
+        return OpenAI(api_key=key) if key else None
+    for cuenta in _cuentas_disponibles():
+        cliente = OpenAI(api_key=_key(cuenta))
+        try:
+            cliente.batches.retrieve(batch.anthropic_batch_id)
+            return cliente
+        except Exception:  # noqa: BLE001 -- invisible para esa cuenta, probar la otra
+            continue
+    return None
+
+
 def status() -> None:
-    openai_client = OpenAI(api_key=_api_key())
     with Session(get_engine()) as session:
         abiertos = session.scalars(
             select(SegmentationBatch).where(
@@ -191,17 +248,18 @@ def status() -> None:
             print("no hay batches abiertos")
             return
         for batch in abiertos:
-            remoto = openai_client.batches.retrieve(batch.anthropic_batch_id)
+            cliente = _cliente_de(batch)
+            if cliente is None:
+                print(f"{batch.anthropic_batch_id}  (cuenta {batch.cuenta or '?'} no configurada)")
+                continue
+            remoto = cliente.batches.retrieve(batch.anthropic_batch_id)
             print(
-                f"{batch.anthropic_batch_id}  {remoto.status:12} "
+                f"{batch.anthropic_batch_id}  cuenta={batch.cuenta or '?'}  {remoto.status:12} "
                 f"requests={batch.total_requests}  counts={remoto.request_counts}"
             )
 
 
 def collect() -> None:
-    openai_client = OpenAI(api_key=_api_key())
-    client = OpenAIBatchSegmentationClient(openai_client)
-
     with Session(get_engine()) as session:
         abiertos = session.scalars(
             select(SegmentationBatch).where(
@@ -210,16 +268,19 @@ def collect() -> None:
         ).all()
 
         for batch in abiertos:
-            # Las dos keys son organizaciones distintas y el limite de tokens
-            # encolados es por organizacion, asi que se usan en paralelo para
-            # duplicar el throughput. La contra: un batch enviado con una key
-            # es invisible para la otra, y `retrieve` falla. Se omite en vez de
-            # reventar, para que correr --collect con cualquiera de las dos
-            # recolecte lo suyo y deje lo ajeno intacto para la otra pasada.
+            # Cada batch se recolecta con la cuenta que lo mando (registrada en
+            # `cuenta`). Antes habia que correr --collect una vez por cuenta,
+            # con env vars distintas, y un batch quedaba sin recolectar si
+            # alguien se olvidaba de la segunda pasada.
+            cliente = _cliente_de(batch)
+            if cliente is None:
+                print(f"{batch.anthropic_batch_id}: cuenta {batch.cuenta or '?'} no disponible, se omite")
+                continue
+            client = OpenAIBatchSegmentationClient(cliente)
             try:
                 terminado = client.is_ended(batch.anthropic_batch_id)
             except Exception as exc:  # noqa: BLE001
-                print(f"{batch.anthropic_batch_id}: no visible con esta key ({type(exc).__name__}), se omite")
+                print(f"{batch.anthropic_batch_id}: no visible ({type(exc).__name__}), se omite")
                 continue
             if not terminado:
                 print(f"{batch.anthropic_batch_id}: todavia procesando, se omite")

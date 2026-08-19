@@ -100,6 +100,11 @@ class SegmentationBatch(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     modelo: Mapped[str] = mapped_column(String(100), nullable=False)
     total_requests: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Cual de las dos cuentas de OpenAI mando este batch ("1" | "2"). Un batch
+    # abierto con una cuenta es invisible para la otra -- son organizaciones
+    # distintas y `retrieve` falla--, asi que sin este dato el collect tiene
+    # que adivinar. Nullable: los batches viejos y los de Anthropic no lo usan.
+    cuenta: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     # custom_id -> [lo, hi]. Hace falta al recolectar para validar que el
     # modelo no haya inventado indices fuera del chunk que realmente vio; para
     # entonces los chunks originales ya no estan en memoria.
