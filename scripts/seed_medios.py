@@ -43,6 +43,14 @@ STATIONS = [
     ("super_100", "Super 100", "radio"),
     ("tnh", "TNH", "tv"),
     ("tsi", "TSI", "radio"),
+    # Agregado 2026-08-18: mediaCAP venia capturando canal_10 desde el 13-ago
+    # (128 archivos en s3://mediadev-recordings/canal_10/) pero sin Medio
+    # sembrado, asi que DiscoveryService las ignoraba una por una y solo lo
+    # avisaba en el log del cron -- 5 dias de television capturada, pagada en
+    # S3 y nunca transcrita. El sintoma es silencioso por diseño: el discover
+    # no falla, sigue de largo. Vale la pena mirar ese ATENCION del log cuando
+    # aparezca una estacion nueva.
+    ("canal_10", "Canal 10", "tv"),
 ]
 
 

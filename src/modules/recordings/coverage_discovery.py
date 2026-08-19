@@ -21,6 +21,7 @@ filas, no millones como el listado de S3), y el filtro por `s3_key` ya
 existente resuelve la idempotencia igual que en DiscoveryService.
 """
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -43,11 +44,38 @@ _QUERY = text(
 )
 
 
+# Estaciones que se dieron de alta DESPUES de que mediaCAP ya venia
+# capturandolas: solo se ingesta desde esta fecha en adelante, no todo su
+# historico. Sin esto, sembrar un Medio nuevo dispara la transcripcion de
+# semanas de backlog acumulado en la siguiente corrida del cron (5 min) --
+# GPU que quiza nadie pidio.
+#
+# Para procesar el historico de una de estas: bajar/quitar su fecha aca, o
+# encolar a mano con `enqueue_transcriptions.py --medio X --fecha-desde ...`
+# (las Grabacion se crean igual en la proxima corrida y quedan PENDIENTE).
+DESDE_POR_ESTACION: dict[str, datetime] = {
+    # Alta 2026-08-18. mediaCAP venia capturando canal_10 desde el 13-ago (128
+    # horas) sin Medio sembrado.
+    #
+    # LLEGO TARDE PARA canal_10: entre sembrar el Medio y desplegar este corte
+    # pasaron minutos, y en esa ventana el cron de discover (cada 5 min) ya
+    # habia creado las 130 Grabacion, el de enqueue las habia encolado y la
+    # chepita viva las transcribio. Queda igual porque el corte SI aplica a la
+    # proxima estacion que se siembre -- que es un caso recurrente
+    # (suave_fm_teg, super_100, tnh y tsi entraron igual).
+    #
+    # Leccion: sembrar un Medio nuevo dispara la ingesta completa de su
+    # historico en <5 min. El corte hay que desplegarlo ANTES del seed.
+    "canal_10": datetime(2026, 8, 18, 10, 0, tzinfo=timezone.utc),  # 04:00 GMT-6
+}
+
+
 @dataclass
 class CoverageDiscoveryResult:
     creadas: int
     ya_existian: int
     estaciones_sin_medio: set[str]
+    omitidas_por_fecha: int = 0
 
 
 class CoverageDiscoveryService:
@@ -66,9 +94,19 @@ class CoverageDiscoveryService:
     def discover(self) -> CoverageDiscoveryResult:
         creadas = 0
         ya_existian = 0
+        omitidas_por_fecha = 0
         estaciones_sin_medio: set[str] = set()
 
         for stream_id, period_start_utc, period_end_utc, s3_key in self._coverage.execute(_QUERY):
+            corte = DESDE_POR_ESTACION.get(stream_id)
+            if corte is not None:
+                inicio = period_start_utc
+                if inicio.tzinfo is None:      # coverage puede devolverlo naive
+                    inicio = inicio.replace(tzinfo=timezone.utc)
+                if inicio < corte:
+                    omitidas_por_fecha += 1
+                    continue
+
             if self._grabaciones.get_by_s3_key(s3_key) is not None:
                 ya_existian += 1
                 continue
@@ -102,6 +140,7 @@ class CoverageDiscoveryService:
             creadas=creadas,
             ya_existian=ya_existian,
             estaciones_sin_medio=estaciones_sin_medio,
+            omitidas_por_fecha=omitidas_por_fecha,
         )
 
     def _resolve_programa_id(self, stream_id: str):

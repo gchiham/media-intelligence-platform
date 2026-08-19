@@ -35,6 +35,9 @@ def main() -> None:
 
         print(f"creadas: {result.creadas}")
         print(f"ya existian: {result.ya_existian}")
+        if result.omitidas_por_fecha:
+            print(f"omitidas por fecha de corte: {result.omitidas_por_fecha} "
+                  f"(ver DESDE_POR_ESTACION en coverage_discovery.py)")
         if result.estaciones_sin_medio:
             print(f"ATENCION -- estaciones sin Medio (corre seed_medios.py): "
                   f"{sorted(result.estaciones_sin_medio)}")
