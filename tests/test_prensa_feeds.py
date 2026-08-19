@@ -83,3 +83,39 @@ def test_atom_falla_ruidoso_en_vez_de_devolver_cero():
     atom = b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>'
     with pytest.raises(FormatoNoSoportado):
         parsear_rss(atom)
+
+
+def test_entidad_html_suelta_no_tumba_todo_el_documento():
+    """Bug real de hch.tv (2026-08-19): &raquo; sin escapar en <media:title>
+    tumbaba el parseo del feed entero -- XML solo conoce amp/lt/gt/apos/quot,
+    &raquo; es HTML. Se repara reemplazandola por su caracter antes de
+    reintentar, asi el resto del documento (los <item> normales) se sigue
+    leyendo bien."""
+    cuerpo = RSS.replace(
+        b"<title>Criterio.hn</title>",
+        b"<title>Criterio.hn</title>\n  <subtitulo>Seccion &raquo; Portada</subtitulo>",
+    )
+    items = parsear_rss(cuerpo)
+    assert len(items) == 1
+    assert items[0].titulo == "Titulo con acentos: eleccion"
+
+
+def test_entidad_numerica_y_las_5_validas_de_xml_no_se_tocan():
+    """Ya son XML valido: no deberian pasar por el reparador -- el parseo
+    directo alcanza y el propio XML las resuelve a su caracter."""
+    cuerpo = RSS.replace(b"Resumen corto", b"A &amp; B &#8217; C &#x2019; D")
+    assert parsear_rss(cuerpo)[0].resumen == "A & B ’ C ’ D"
+
+
+def test_reparar_entidades_html_deja_intactas_las_de_xml():
+    from src.modules.prensa.feeds import _reparar_entidades_html
+
+    original = b"A &amp; B &lt;C&gt; D &#8217; E &#x2019;"
+    assert _reparar_entidades_html(original) == original
+
+
+def test_reparar_entidades_html_reemplaza_por_el_caracter():
+    from src.modules.prensa.feeds import _reparar_entidades_html
+
+    assert _reparar_entidades_html(b"Portada &raquo; Seccion") == "Portada » Seccion".encode()
+    assert _reparar_entidades_html(b"un&nbsp;espacio") == "un\xa0espacio".encode()

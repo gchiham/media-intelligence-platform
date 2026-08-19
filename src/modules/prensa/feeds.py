@@ -6,16 +6,40 @@ requests no esta declarada; agregar una dependencia de runtime para hacer
 GETs condicionales no se justifica.
 """
 import gzip
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from html.entities import html5 as _ENTIDADES_HTML5
 
 from defusedxml.ElementTree import fromstring as parse_xml
 
 # Los feeds son XML de terceros: defusedxml evita billion-laughs y entidades
 # externas. ElementTree pelado no protege contra la primera.
+
+# XML solo conoce 5 entidades (amp/lt/gt/apos/quot); WordPress a veces mete
+# entidades HTML (&raquo;, &nbsp;, &hellip;...) sueltas fuera de CDATA, lo que
+# no es XML valido y tumba el parseo del DOCUMENTO ENTERO, no solo ese campo
+# -- visto en produccion con hch.tv (&raquo; en <media:title>). Se reparan
+# sobre los bytes crudos: los nombres de entidad son siempre ASCII sea cual
+# sea la codificacion declarada, asi que no hace falta decodificar el feed
+# entero para arreglar esto.
+_ENTIDAD_BYTES = re.compile(rb"&(#[0-9]+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);?")
+_ENTIDADES_XML_VALIDAS = {b"amp", b"lt", b"gt", b"apos", b"quot"}
+
+
+def _reparar_entidades_html(cuerpo: bytes) -> bytes:
+    def _reemplazar(m: re.Match[bytes]) -> bytes:
+        nombre = m.group(1)
+        if nombre.startswith(b"#") or nombre in _ENTIDADES_XML_VALIDAS:
+            return m.group(0)  # numerica o XML valida: se deja intacta
+        texto = nombre.decode("ascii", "replace")
+        caracter = _ENTIDADES_HTML5.get(texto + ";") or _ENTIDADES_HTML5.get(texto)
+        return caracter.encode("utf-8") if caracter else m.group(0)
+
+    return _ENTIDAD_BYTES.sub(_reemplazar, cuerpo)
 
 NS = {
     "content": "http://purl.org/rss/1.0/modules/content/",
@@ -175,6 +199,16 @@ def _parsear(cuerpo: bytes):
     try:
         return parse_xml(cuerpo)
     except Exception as e:
+        # Antes de rendirse, probar con las entidades HTML reparadas -- cubre
+        # el caso comun de un feed WordPress con &raquo;/&nbsp;/etc sueltas.
+        # Si el cuerpo no tenia ese problema, _reparar_entidades_html no
+        # cambia nada y este segundo intento falla igual que el primero.
+        reparado = _reparar_entidades_html(cuerpo)
+        if reparado != cuerpo:
+            try:
+                return parse_xml(reparado)
+            except Exception:
+                pass
         # Cloudflare y los temas de WordPress mal configurados contestan 200 con
         # HTML: sin este mensaje el sintoma es un ParseError pelado en la linea 1.
         muestra = cuerpo[:60].decode("utf-8", "ignore").strip()
