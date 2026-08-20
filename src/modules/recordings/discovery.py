@@ -24,6 +24,42 @@ _KEY_PATTERN = re.compile(
 )
 
 
+# Estaciones dadas de baja del monitoreo: no se ingesta NADA de ellas, ni
+# historico ni nuevo. Lo comparten los dos caminos de descubrimiento
+# (DiscoveryService por S3 y CoverageDiscoveryService por recording_coverage),
+# porque ambos corren en paralelo y tapar uno solo no sirve de nada.
+#
+# Por que estas cinco (medido sobre 2026-08-03 al 19, 5.723 grabaciones
+# segmentadas y 66.197 noticias):
+#
+#   estacion       grabaciones  noticias  not/grab  menciones de cliente
+#   fm_941                 264        75      0.28   1
+#   suave_fm_teg           249       178      0.71   0
+#   radio_valle            274       206      0.75   1
+#   super_100              261       629      2.41   6
+#   xy_sps                 260       771      2.97   4
+#
+# Contra canal_10, que saca 43.4 noticias por grabacion y 749 menciones. Las
+# tres primeras son emisoras musicales (94.1 FM, Suave FM): 787 horas de audio
+# en 17 dias para DOS menciones de cliente. Cada hora ingestada se paga tres
+# veces -- GPU de transcripcion, tokens de segmentacion y clipping.
+#
+# Decision del 2026-08-20. Para reactivar una, sacarla de aca: su historico
+# sigue en la base intacto (no se borro nada) y la ingesta se reanuda sola en
+# la siguiente corrida del cron.
+#
+# OJO: esto corta la INGESTA, no la CAPTURA. mediaCAP (repo aparte) las sigue
+# grabando y subiendo a S3; para dejar de pagar ese almacenamiento hay que
+# sacarlas tambien de su config/stations.json.
+EXCLUIDAS: frozenset[str] = frozenset({
+    "fm_941",
+    "suave_fm_teg",
+    "radio_valle",
+    "super_100",
+    "xy_sps",
+})
+
+
 class EstacionNoRegistrada(Exception):
     """El archivo esta en S3 pero su carpeta de estacion no tiene un Medio
     sembrado todavia (ver scripts/seed_medios.py)."""
@@ -39,6 +75,7 @@ class DiscoveryResult:
     ya_existian: int
     ignoradas_no_reconocidas: int
     estaciones_sin_medio: set[str]
+    omitidas_por_exclusion: int = 0
 
 
 class DiscoveryService:
@@ -60,6 +97,7 @@ class DiscoveryService:
         creadas = 0
         ya_existian = 0
         ignoradas = 0
+        excluidas = 0
         estaciones_sin_medio: set[str] = set()
 
         paginator = self._s3.get_paginator("list_objects_v2")
@@ -71,11 +109,18 @@ class DiscoveryService:
                     ignoradas += 1
                     continue
 
+                # La exclusion se chequea ANTES del get_by_s3_key: si no, cada
+                # archivo de una estacion dada de baja cuesta una consulta a la
+                # base, y son cientos por corrida del cron (cada 5 min).
+                station = match.group("station")
+                if station in EXCLUIDAS:
+                    excluidas += 1
+                    continue
+
                 if self._grabaciones.get_by_s3_key(key) is not None:
                     ya_existian += 1
                     continue
 
-                station = match.group("station")
                 try:
                     programa_id = self._resolve_programa_id(station)
                 except EstacionNoRegistrada:
@@ -109,6 +154,7 @@ class DiscoveryService:
             ya_existian=ya_existian,
             ignoradas_no_reconocidas=ignoradas,
             estaciones_sin_medio=estaciones_sin_medio,
+            omitidas_por_exclusion=excluidas,
         )
 
     def _resolve_programa_id(self, station: str):

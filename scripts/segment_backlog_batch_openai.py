@@ -44,6 +44,8 @@ from src.modules.ai.batch import build_custom_id  # noqa: E402
 from src.modules.ai.client_profiles import cargar_perfiles  # noqa: E402
 from src.modules.ai.repeated_content import RepeatedContentIndex  # noqa: E402
 from src.modules.ai.schemas import Word  # noqa: E402
+from src.modules.media.models import Medio, Programa  # noqa: E402
+from src.modules.recordings.discovery import EXCLUIDAS  # noqa: E402
 from src.modules.recordings.models import EstadoGrabacion, Grabacion, Transcripcion  # noqa: E402
 
 
@@ -53,6 +55,7 @@ def _pendientes(
     fecha_desde: datetime | None = None,
     fecha_hasta: datetime | None = None,
     offset: int = 0,
+    medio: str | None = None,
 ) -> list[tuple[Grabacion, Transcripcion]]:
     """Grabaciones transcritas que todavia no tienen segmentos cacheados.
 
@@ -68,13 +71,28 @@ def _pendientes(
     stmt = (
         select(Grabacion, Transcripcion)
         .join(Transcripcion, Transcripcion.grabacion_id == Grabacion.id)
+        .join(Programa, Programa.id == Grabacion.programa_id)
+        .join(Medio, Medio.id == Programa.medio_id)
         .where(Grabacion.estado == EstadoGrabacion.PROCESADA)
         .where(Grabacion.id.notin_(ya_cacheadas))
+        # Las estaciones dadas de baja se filtran aca tambien, no solo en la
+        # ingesta: al 2026-08-20 quedaban ~1.300 grabaciones suyas ya
+        # transcritas en el backlog, y un submit sobre junio/julio las habria
+        # pagado igual. El corte en la ingesta solo frena lo que entra de aca
+        # en adelante.
+        .where(Medio.codigo.notin_(EXCLUIDAS))
     )
     if fecha_desde is not None:
         stmt = stmt.where(Grabacion.fecha_inicio >= fecha_desde)
     if fecha_hasta is not None:
         stmt = stmt.where(Grabacion.fecha_inicio < fecha_hasta)
+    if medio is not None:
+        # Sin esto el submit toma las mas recientes de TODOS los medios (21,665
+        # sin segmentar al 2026-08-18): pedir "segmenta canal_10" terminaria
+        # pagando LLM por otra cosa.
+        # El join a Medio ya esta arriba (lo necesita el filtro de EXCLUIDAS),
+        # asi que aca solo va la condicion.
+        stmt = stmt.where(Medio.codigo == medio)
     # `offset` existe para poder tener dos batches en vuelo a la vez (una por
     # key/organizacion, que es donde aplica el limite de tokens encolados de
     # OpenAI). Sin esto las dos tandas eligen las MISMAS grabaciones: el filtro
@@ -129,6 +147,7 @@ def submit(
     fecha_desde: datetime | None = None,
     fecha_hasta: datetime | None = None,
     offset: int = 0,
+    medio: str | None = None,
 ) -> None:
     """Arma los chunks pendientes y los reparte entre TODAS las cuentas de
     OpenAI disponibles, un batch por cuenta. Cada cuenta tiene su propia cuota
@@ -139,7 +158,7 @@ def submit(
         raise SystemExit("no hay ninguna cuenta de OpenAI configurada")
 
     with Session(get_engine()) as session:
-        filas = _pendientes(session, limit, fecha_desde, fecha_hasta, offset)
+        filas = _pendientes(session, limit, fecha_desde, fecha_hasta, offset, medio)
         if not filas:
             print("no hay grabaciones pendientes de segmentar")
             return
@@ -352,6 +371,10 @@ def main() -> None:
         "--offset", type=int, default=0,
         help="salta las primeras N grabaciones; permite dos tandas en vuelo sin solaparse",
     )
+    parser.add_argument(
+        "--medio", type=str, default=None,
+        help="codigo del Medio (p.ej. canal_10); sin esto toma las mas recientes de TODOS",
+    )
     args = parser.parse_args()
 
     if args.submit:
@@ -361,6 +384,7 @@ def main() -> None:
             fecha_desde=_parse_fecha(args.fecha_desde),
             fecha_hasta=_parse_fecha(args.fecha_hasta),
             offset=args.offset,
+            medio=args.medio,
         )
     elif args.status:
         status()

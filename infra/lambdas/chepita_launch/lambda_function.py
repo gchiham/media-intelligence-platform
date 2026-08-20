@@ -25,7 +25,27 @@ SECURITY_GROUP = "sg-033ac2dd79d76f56a"
 QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/050871635829/media-intel-transcription-jobs"
 DONE_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/050871635829/media-intel-transcription-done"
 
+# El worker viene horneado en la AMI, pero se intenta bajar la version fresca
+# de S3 antes de arrancar: asi un arreglo del worker se despliega subiendo un
+# archivo, sin rehornear la AMI (que son ~40 min). Si la descarga falla se sigue
+# con la copia de la AMI -- nunca dejar la instancia sin worker por esto.
+WORKER_S3 = "s3://media-intel-transcribe-050871635829/deploy/worker_prefetch.py"
+
+BAJAR_WORKER = f"""
+if aws s3 cp {WORKER_S3} /tmp/worker_prefetch.py --region us-east-1 2>/dev/null; then
+  if /opt/pytorch/bin/python3 -m py_compile /tmp/worker_prefetch.py 2>/dev/null; then
+    cp /tmp/worker_prefetch.py /home/ubuntu/worker_prefetch.py
+    echo "worker actualizado desde S3"
+  else
+    echo "ATENCION worker de S3 no compila -- se usa el de la AMI"
+  fi
+else
+  echo "sin worker en S3 -- se usa el de la AMI"
+fi
+"""
+
 START_WORKERS_SCRIPT = f"""
+{BAJAR_WORKER}
 export QUEUE_URL="{QUEUE_URL}"
 export DONE_QUEUE_URL="{DONE_QUEUE_URL}"
 export WHISPER_MODEL=large-v3-turbo

@@ -27,7 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.modules.media.repositories import MedioRepository, ProgramaRepository
-from src.modules.recordings.discovery import EstacionNoRegistrada
+from src.modules.recordings.discovery import EXCLUIDAS, EstacionNoRegistrada
 from src.modules.recordings.models import EstadoGrabacion, Grabacion
 from src.modules.recordings.repositories import GrabacionRepository
 from src.shared.logging_utils import get_logger
@@ -76,6 +76,7 @@ class CoverageDiscoveryResult:
     ya_existian: int
     estaciones_sin_medio: set[str]
     omitidas_por_fecha: int = 0
+    omitidas_por_exclusion: int = 0
 
 
 class CoverageDiscoveryService:
@@ -95,9 +96,16 @@ class CoverageDiscoveryService:
         creadas = 0
         ya_existian = 0
         omitidas_por_fecha = 0
+        omitidas_por_exclusion = 0
         estaciones_sin_medio: set[str] = set()
 
         for stream_id, period_start_utc, period_end_utc, s3_key in self._coverage.execute(_QUERY):
+            # Baja definitiva: ni historico ni nuevo. Va primero para no gastar
+            # una consulta por fila de una estacion que no queremos.
+            if stream_id in EXCLUIDAS:
+                omitidas_por_exclusion += 1
+                continue
+
             corte = DESDE_POR_ESTACION.get(stream_id)
             if corte is not None:
                 inicio = period_start_utc
@@ -141,6 +149,7 @@ class CoverageDiscoveryService:
             ya_existian=ya_existian,
             estaciones_sin_medio=estaciones_sin_medio,
             omitidas_por_fecha=omitidas_por_fecha,
+            omitidas_por_exclusion=omitidas_por_exclusion,
         )
 
     def _resolve_programa_id(self, stream_id: str):
