@@ -35,6 +35,9 @@ def main() -> None:
         print(f"creadas: {result.creadas}")
         print(f"ya existian: {result.ya_existian}")
         print(f"ignoradas (no reconocidas): {result.ignoradas_no_reconocidas}")
+    if result.omitidas_por_exclusion:
+        print(f"omitidas por baja de monitoreo: {result.omitidas_por_exclusion} "
+              f"(ver EXCLUIDAS en discovery.py)")
         if result.estaciones_sin_medio:
             print(f"ATENCION -- estaciones sin Medio (corre seed_medios.py): "
                   f"{sorted(result.estaciones_sin_medio)}")

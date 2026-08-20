@@ -15,12 +15,17 @@ from sqlalchemy.orm import Session  # noqa: E402
 from src.infrastructure.db.engine import get_engine  # noqa: E402
 from src.modules.media.models import Medio, Programa, TipoMedio  # noqa: E402
 
+# Bajas del 2026-08-20: `fm_941`, `suave_fm_teg`, `radio_valle`, `super_100` y
+# `xy_sps` salieron del monitoreo por rendimiento (ver EXCLUIDAS en
+# src/modules/recordings/discovery.py, con los numeros que justifican el corte).
+# Se dejan comentadas y no borradas: sus Medio y su historico siguen en la base,
+# asi que reactivar una es sacarla de EXCLUIDAS y descomentarla aca.
 STATIONS = [
     ("xy_hrn", "XY HRN", "radio"),
     ("xy_tgu", "XY TGU", "radio"),
-    ("xy_sps", "XY SPS", "radio"),
+    # ("xy_sps", "XY SPS", "radio"),                 # baja 2026-08-20
     ("radio_satelite", "Radio Satelite", "radio"),
-    ("fm_941", "94.1 FM", "radio"),
+    # ("fm_941", "94.1 FM", "radio"),                # baja 2026-08-20
     ("suave_fm", "Suave FM", "radio"),
     ("radio_america", "Radio America", "radio"),
     ("radio_globo", "Radio Globo", "radio"),
@@ -34,13 +39,13 @@ STATIONS = [
     ("hch_radio", "HCH Radio", "radio"),
     ("canal_5", "Canal 5", "tv"),
     ("canal_6", "Canal 6", "tv"),
-    ("radio_valle", "Radio Valle", "radio"),
+    # ("radio_valle", "Radio Valle", "radio"),      # baja 2026-08-20
     # Agregadas 2026-07-20 (docs/INGESTION_DESIGN.md): carpetas reales en
     # s3://mediadev-recordings/ sin Medio sembrado todavia -- DiscoveryService
     # las ignora (y las reporta) mientras no esten aca. Clasificacion
     # radio/tv por nombre, no por config/stations.json -- revisar si esta mal.
-    ("suave_fm_teg", "Suave FM Tegucigalpa", "radio"),
-    ("super_100", "Super 100", "radio"),
+    # ("suave_fm_teg", "Suave FM Tegucigalpa", "radio"),   # baja 2026-08-20
+    # ("super_100", "Super 100", "radio"),          # baja 2026-08-20
     ("tnh", "TNH", "tv"),
     ("tsi", "TSI", "radio"),
     # Agregado 2026-08-18: mediaCAP venia capturando canal_10 desde el 13-ago
