@@ -102,6 +102,24 @@ prefetch_q: "queue.Queue" = queue.Queue(maxsize=1)
 stop_event = threading.Event()
 
 
+def _devolver(msg: dict) -> None:
+    """Devuelve un mensaje a la cola YA, sin esperar los 30 min del visibility
+    timeout.
+
+    Sin esto, un mensaje que el prefetch recibio pero nunca llego a procesar
+    queda "en vuelo" media hora: invisible para todos, sin nadie trabajandolo.
+    Peor todavia, el supervisor lee ese contador y cree que hay trabajo, asi
+    que mantiene la flota de GPU encendida indefinidamente (paso el
+    2026-08-19: 3 g6.xlarge 11 h al 0% de GPU por 14 mensajes fantasma).
+    """
+    try:
+        sqs.change_message_visibility(
+            QueueUrl=QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"], VisibilityTimeout=0
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"WARN no se pudo devolver el mensaje a la cola ({type(exc).__name__})")
+
+
 def prefetch_loop() -> None:
     while not stop_event.is_set():
         resp = sqs.receive_message(
@@ -114,6 +132,13 @@ def prefetch_loop() -> None:
             continue
 
         msg = messages[0]
+        # El receive_message de arriba bloquea hasta 10 s: el bucle principal
+        # pudo haber decidido salir mientras tanto. Sin este segundo chequeo el
+        # mensaje se queda en vuelo cuando el proceso termine y mate este hilo
+        # daemon.
+        if stop_event.is_set():
+            _devolver(msg)
+            return
         job_id = msg["MessageId"]
         attempt = int(msg["Attributes"]["ApproximateReceiveCount"])
 
@@ -142,7 +167,20 @@ def prefetch_loop() -> None:
             continue
 
         log(f"PREFETCHED {station} download_elapsed={time.time() - t_dl:.1f}s")
-        prefetch_q.put((msg, job, local_audio, job_id, attempt))
+        # put() con timeout, no bloqueante para siempre: la cola tiene
+        # maxsize=1, asi que si el bucle principal ya salio nadie va a leer y
+        # este hilo quedaria colgado con el mensaje en vuelo hasta que el
+        # proceso lo mate. Con timeout podemos devolverlo a la cola.
+        while not stop_event.is_set():
+            try:
+                prefetch_q.put((msg, job, local_audio, job_id, attempt), timeout=5)
+                break
+            except queue.Full:
+                continue
+        else:
+            _devolver(msg)
+            _cleanup(local_audio)
+            return
 
 
 threading.Thread(target=prefetch_loop, daemon=True).start()
@@ -247,5 +285,24 @@ while idle_rounds < 3:
     sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
 
 stop_event.set()
+
+# Drenar lo que el prefetch haya alcanzado a dejar: son mensajes ya recibidos
+# de SQS (o sea, en vuelo e invisibles 30 min) que nadie va a procesar. Hay que
+# devolverlos explicitamente o el supervisor los cuenta como trabajo y no apaga
+# la instancia.
+devueltos = 0
+while True:
+    try:
+        pendiente = prefetch_q.get_nowait()
+    except queue.Empty:
+        break
+    if pendiente is None:
+        continue
+    msg_p, _job_p, local_p, _id_p, _att_p = pendiente
+    _devolver(msg_p)
+    _cleanup(local_p)
+    devueltos += 1
+
 log(f"cola vacia, saliendo. total procesados por este worker: {processed}, fallidos: {failed}, "
+    f"devueltos a la cola sin procesar: {devueltos}, "
     f"tiempo total esperando descarga: {wait_for_download_total:.1f}s")

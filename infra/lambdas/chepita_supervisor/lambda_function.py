@@ -32,6 +32,38 @@ GRACIA_APAGADO = timedelta(minutes=3)
 # dejar los workers corriendo (espera running + SSM Online). Tocar antes seria
 # competir con ella.
 GRACIA_REINICIO = timedelta(minutes=6)
+# Techo duro de ociosidad: si no hay mensajes VISIBLES durante este tiempo, se
+# apaga aunque el contador de "en vuelo" diga que hay trabajo.
+#
+# Por que hace falta: un mensaje en vuelo que nadie procesa es indistinguible,
+# desde SQS, de uno que si se esta procesando. El 2026-08-19 quedaron 14
+# mensajes fantasma (workers que murieron sin devolverlos) y la condicion
+# `en_vuelo == 0` no se cumplio nunca: 3 g6.xlarge encendidas 11 h con la GPU
+# al 0%, ~$16. El worker ya no los abandona (ver `_devolver` en
+# worker_prefetch.py), pero el supervisor no debe poder sostener una flota de
+# GPU indefinidamente por un contador que se traba.
+#
+# El umbral es mayor que el VisibilityTimeout de la cola (30 min) a proposito:
+# un mensaje en vuelo de verdad, si su worker murio, vuelve a estar VISIBLE
+# antes de los 30 min. Entonces "35 min sin ver un solo mensaje visible"
+# implica que no queda trabajo real -- ni en proceso ni abandonado.
+TECHO_OCIOSIDAD = timedelta(minutes=35)
+# Tope duro de vida para una chepita del cron, independiente de cualquier
+# senal de la cola. Es el ultimo cinturon: si la logica de arriba falla por un
+# motivo que no previmos, esto acota el gasto a ~$4.8 por instancia en vez de
+# dejarla encendida indefinidamente.
+#
+# Solo aplica a las del cron (tag ManagedBy=cron-chepita). Las que se lanzan a
+# mano para un backfill largo no llevan ese tag y no se ven afectadas.
+VIDA_MAXIMA = timedelta(hours=6)
+# Donde se guarda "la ultima vez que hubo trabajo visible". La lambda es sin
+# estado y corre cada 5 min, asi que necesita persistir el dato en algun lado;
+# Parameter Store alcanza y no cuesta nada a esta escala.
+PARAM_ULTIMO_TRABAJO = "/media-intel/chepita/ultimo-trabajo-visible"
+
+# Mismo criterio que la lambda de lanzamiento: worker fresco de S3 si se puede,
+# el de la AMI si no. Ver el comentario en chepita_launch/lambda_function.py.
+WORKER_S3 = "s3://media-intel-transcribe-050871635829/deploy/worker_prefetch.py"
 
 ARRANCAR_SI_HACEN_FALTA = f"""
 if pgrep -f worker_prefetch >/dev/null 2>&1; then
@@ -39,6 +71,11 @@ if pgrep -f worker_prefetch >/dev/null 2>&1; then
   exit 0
 fi
 echo "sin workers y hay cola -- relanzando"
+if aws s3 cp {WORKER_S3} /tmp/worker_prefetch.py --region us-east-1 2>/dev/null \
+   && /opt/pytorch/bin/python3 -m py_compile /tmp/worker_prefetch.py 2>/dev/null; then
+  cp /tmp/worker_prefetch.py /home/ubuntu/worker_prefetch.py
+  echo "worker actualizado desde S3"
+fi
 export QUEUE_URL="{QUEUE_URL}"
 export DONE_QUEUE_URL="{DONE_QUEUE_URL}"
 export WHISPER_MODEL=large-v3-turbo
@@ -54,6 +91,35 @@ sleep 3
 echo "workers ahora: $(pgrep -fc worker_prefetch)"
 date -u +"reinicio %Y-%m-%dT%H:%M:%SZ" >> /home/ubuntu/run_logs/reinicios.log
 """
+
+
+def _marcar_ociosidad(ssm, visibles: int, ahora: datetime) -> datetime | None:
+    """Lleva la cuenta de desde cuando no hay mensajes visibles.
+
+    Devuelve el instante en que empezo la ociosidad, o None si ahora mismo hay
+    trabajo visible. Guarda el dato en Parameter Store porque la lambda es sin
+    estado entre invocaciones.
+    """
+    if visibles > 0:
+        ssm.put_parameter(
+            Name=PARAM_ULTIMO_TRABAJO, Value=ahora.isoformat(),
+            Type="String", Overwrite=True,
+        )
+        return None
+
+    try:
+        crudo = ssm.get_parameter(Name=PARAM_ULTIMO_TRABAJO)["Parameter"]["Value"]
+        return datetime.fromisoformat(crudo)
+    except ssm.exceptions.ParameterNotFound:
+        # Primera corrida sin trabajo: sembrar ahora para que el techo se mida
+        # desde este momento y no apague algo recien lanzado.
+        ssm.put_parameter(
+            Name=PARAM_ULTIMO_TRABAJO, Value=ahora.isoformat(),
+            Type="String", Overwrite=True,
+        )
+        return ahora
+    except (ValueError, KeyError):
+        return None
 
 
 def handler(event, context):
@@ -75,20 +141,49 @@ def handler(event, context):
     instancias = [i for r in resp["Reservations"] for i in r["Instances"]]
     ahora = datetime.now(timezone.utc)
 
+    # Antes del return temprano: el reloj de ociosidad se lleva siempre, haya o
+    # no instancias. Si solo se actualizara con la flota encendida, el
+    # timestamp quedaria congelado en el pasado y la primera chepita que
+    # arranque se veria "ociosa hace horas" y se apagaria sola.
+    ociosa_desde = _marcar_ociosidad(ssm, visibles, ahora)
+
     if not instancias:
         print(f"sin chepitas del cron (cola: {visibles} visibles / {en_vuelo} en vuelo)")
         return {"apagadas": [], "revisadas": []}
 
+    # --------------------------------------------------------- tope de vida
+    viejas = [i["InstanceId"] for i in instancias
+              if ahora - i["LaunchTime"] >= VIDA_MAXIMA]
+    if viejas:
+        ec2.terminate_instances(InstanceIds=viejas)
+        print(f"ATENCION tope de vida ({VIDA_MAXIMA}) alcanzado -- terminando: {viejas}. "
+              f"cola: {visibles} visibles / {en_vuelo} en vuelo")
+        instancias = [i for i in instancias if i["InstanceId"] not in viejas]
+        if not instancias:
+            return {"apagadas": viejas, "revisadas": []}
+
     # ------------------------------------------------------------ apagado
-    if visibles == 0 and en_vuelo == 0:
+    #
+    # Dos caminos al apagado:
+    #   1. cola limpia de verdad (nada visible NI en vuelo)
+    #   2. nada visible desde hace mas de TECHO_OCIOSIDAD -- el en_vuelo que
+    #      quede son mensajes fantasma, no trabajo real
+    ocio = ahora - ociosa_desde if ociosa_desde else timedelta(0)
+    cola_limpia = visibles == 0 and en_vuelo == 0
+    ocio_excedido = visibles == 0 and ocio >= TECHO_OCIOSIDAD
+
+    if cola_limpia or ocio_excedido:
         a_terminar = [i["InstanceId"] for i in instancias
                       if ahora - i["LaunchTime"] >= GRACIA_APAGADO]
         if a_terminar:
             ec2.terminate_instances(InstanceIds=a_terminar)
-            print(f"cola vacia -- terminando: {a_terminar}")
+            motivo = ("cola vacia" if cola_limpia else
+                      f"sin trabajo visible hace {ocio.total_seconds() / 60:.0f} min "
+                      f"({en_vuelo} en vuelo fantasma)")
+            print(f"{motivo} -- terminando: {a_terminar}")
         else:
-            print("cola vacia pero ninguna paso la gracia de apagado")
-        return {"apagadas": a_terminar, "revisadas": []}
+            print("apagable pero ninguna paso la gracia de apagado")
+        return {"apagadas": a_terminar + viejas, "revisadas": []}
 
     # ----------------------------------------------------------- reinicio
     revisadas = [i["InstanceId"] for i in instancias
@@ -96,7 +191,7 @@ def handler(event, context):
     if not revisadas:
         print(f"hay cola ({visibles}/{en_vuelo}) pero las instancias son muy nuevas "
               f"-- la lambda de lanzamiento todavia puede estar arrancandolas")
-        return {"apagadas": [], "revisadas": []}
+        return {"apagadas": viejas, "revisadas": []}
 
     ssm.send_command(
         InstanceIds=revisadas,
@@ -110,4 +205,4 @@ def handler(event, context):
     )
     print(f"hay cola ({visibles} visibles / {en_vuelo} en vuelo) -- "
           f"comando de supervision enviado a {revisadas}")
-    return {"apagadas": [], "revisadas": revisadas}
+    return {"apagadas": viejas, "revisadas": revisadas}
