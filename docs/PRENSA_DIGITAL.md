@@ -32,9 +32,11 @@ miramos, se perdieron 5 para siempre. Ventana que cubre cada fuente, medida el
 | televicentro | 9 | 625 h |
 | laprensa, elheraldo (sitemap) | 219-235 | ~47 h |
 
-**Cada 15 minutos para todas.** El peor caso activo (hch.tv, 2.9 h) queda con
-casi 12x de margen. No vale la pena escalonar cadencias por fuente: con GET
-condicional, pollear de mas no cuesta nada y la logica se complica al pedo.
+**Cada hora en punto para todas** (cambiado de 15 min el 2026-08-24, a pedido).
+El peor caso activo (hch.tv, 2.9 h de ventana) queda con ~2.9x de margen --
+mucho menos que el 12x de antes, pero todavia positivo. No vale la pena
+escalonar cadencias por fuente: con GET condicional, pollear de mas no cuesta
+nada y la logica se complica al pedo.
 
 `tunota.com` es la excepcion: 3 items publicados casi al mismo tiempo. Publica
 poco pero en rafaga, asi que si suelta 4 notas juntas se pierde una sin importar
@@ -42,10 +44,12 @@ la frecuencia. Si ese medio importa para algun cliente, hay que buscarle otra
 via.
 
 ```
-*/15 * * * * cd /srv/media-intelligence-platform && .venv/bin/python scripts/rss_ingest.py >> logs/rss_ingest.log 2>&1
+0 * * * * cd /srv/media-intelligence-platform && .venv/bin/python scripts/rss_ingest.py >> logs/rss_ingest.log 2>&1
 ```
 
-Sale con codigo 1 si alguna fuente fallo.
+En el servidor real corre dentro del contenedor `backend`, no via venv directo --
+ver crontab de `ubuntu@32.196.209.233` (`docker compose exec -T backend python
+scripts/rss_ingest.py`). Sale con codigo 1 si alguna fuente fallo.
 
 ## Costo de una pasada
 
