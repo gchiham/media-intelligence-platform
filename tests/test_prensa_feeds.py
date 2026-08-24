@@ -71,6 +71,59 @@ def test_sitemap_ignora_urls_sin_bloque_news():
     assert items[0].contenido_html is None  # el sitemap nunca trae cuerpo
 
 
+def test_rss_imagen_desde_media_content():
+    """Formato real de hch.tv/canal_11 (Yahoo Media RSS)."""
+    cuerpo = RSS.replace(
+        b"<content:encoded>",
+        b'<media:content url="https://hch.tv/foto.jpg" medium="image"/>\n'
+        b"    <content:encoded>",
+    ).replace(
+        b'<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"\n'
+        b'     xmlns:dc="http://purl.org/dc/elements/1.1/">',
+        b'<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"\n'
+        b'     xmlns:dc="http://purl.org/dc/elements/1.1/"\n'
+        b'     xmlns:media="http://search.yahoo.com/mrss/">',
+    )
+    assert parsear_rss(cuerpo)[0].imagen_url == "https://hch.tv/foto.jpg"
+
+
+def test_rss_imagen_desde_enclosure():
+    cuerpo = RSS.replace(
+        b"<content:encoded>",
+        b'<enclosure url="https://criterio.hn/foto.jpg" type="image/jpeg"/>\n'
+        b"    <content:encoded>",
+    )
+    assert parsear_rss(cuerpo)[0].imagen_url == "https://criterio.hn/foto.jpg"
+
+
+def test_rss_imagen_fallback_al_primer_img_del_cuerpo():
+    """Sin media:content ni enclosure -- se cae al primer <img> del HTML."""
+    cuerpo = RSS.replace(
+        b"&lt;p&gt;Cuerpo completo&lt;/p&gt;",
+        b'&lt;img src="https://criterio.hn/portada.jpg"&gt;&lt;p&gt;Texto&lt;/p&gt;',
+    )
+    assert parsear_rss(cuerpo)[0].imagen_url == "https://criterio.hn/portada.jpg"
+
+
+def test_rss_sin_imagen_en_ningun_lado():
+    assert parsear_rss(RSS)[0].imagen_url is None
+
+
+def test_sitemap_extrae_primera_image_loc():
+    """Formato real de La Prensa/El Heraldo/Diez (Liferay + Google News)."""
+    cuerpo = SITEMAP.replace(
+        b"    </news:news>",
+        b"    </news:news>\n"
+        b"    <image:image><image:loc>https://laprensa.hn/foto.jpg</image:loc></image:image>",
+    ).replace(
+        b'xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">',
+        b'xmlns:news="http://www.google.com/schemas/sitemap-news/0.9"\n'
+        b'        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">',
+    )
+    items = parsear_sitemap_news(cuerpo)
+    assert items[0].imagen_url == "https://laprensa.hn/foto.jpg"
+
+
 def test_html_en_vez_de_xml_falla_con_mensaje_util():
     """Cloudflare y los temas de WordPress mal configurados contestan 200 con
     HTML -- es el modo de falla real de latribuna.hn y tiempo.hn."""

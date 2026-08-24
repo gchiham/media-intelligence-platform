@@ -90,6 +90,25 @@ ninguna ruta. Se usa el sitemap de Google News, que es mejor que un RSS tipico
 en historial y trae fecha de publicacion exacta, pero **no trae cuerpo**: solo
 titulo y URL.
 
+## Imagen de portada (`Articulo.imagen_url`)
+
+Se guarda la URL de la imagen, nunca el binario -- igual que `clip_s3_uri` en
+`Noticia`. Orden de extraccion (`feeds._imagen_rss` / `parsear_sitemap_news`):
+
+1. RSS con namespace Yahoo Media (`<media:content medium="image">` o
+   `<media:thumbnail>`) -- lo usan hch.tv y canal_11.
+2. `<enclosure type="image/...">` -- RSS 2.0 estandar.
+3. Sitemap de Google News: primera `<image:image><image:loc>` del `<url>` --
+   confirmado en produccion que La Prensa, El Heraldo y Diez lo traen siempre,
+   pese a que el sitemap nunca tiene cuerpo. Es la unica via de imagen para
+   esas tres fuentes (las mas grandes en volumen).
+4. Fallback: primer `<img src="...">` dentro de `content:encoded`, para feeds
+   RSS que no marcan la imagen en un tag aparte.
+
+Las fuentes que no traen `content:encoded` NI corren por sitemap (radio_america,
+confidencial_hn, el_pais_hn, el_pulso) se quedan sin imagen: no hay de donde
+sacarla sin scrapear la nota.
+
 ## Donde se ve
 
 `GET /api/v1/prensa/dashboard?token=...` -- seccion Prensa Digital del portal,

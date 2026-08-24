@@ -46,7 +46,15 @@ NS = {
     "dc": "http://purl.org/dc/elements/1.1/",
     "sm": "http://www.sitemaps.org/schemas/sitemap/0.9",
     "news": "http://www.google.com/schemas/sitemap-news/0.9",
+    "media": "http://search.yahoo.com/mrss/",
+    "image": "http://www.google.com/schemas/sitemap-image/1.1",
 }
+
+# Primer <img src="..."> del cuerpo HTML -- fallback cuando el feed no trae
+# imagen en un tag dedicado (ver _imagen_rss). El texto ya viene decodificado
+# por ElementTree (content:encoded es texto plano dentro del XML), asi que
+# aplicar un regex aca no toca nada XML-unsafe.
+_IMG_SRC = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 
 # Algunos medios (La Tribuna, Tiempo) filtran por user agent. Uno de navegador
 # pasa; uno vacio o de script se come un 403.
@@ -77,6 +85,7 @@ class ItemFeed:
     resumen: str | None = None
     contenido_html: str | None = None
     autor: str | None = None
+    imagen_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +158,7 @@ def parsear_rss(cuerpo: bytes) -> list[ItemFeed]:
         # descarta el item y se sigue con el resto del feed.
         if not (guid and link and publicado):
             continue
+        contenido_html = _texto(nodo, "content:encoded")
         items.append(
             ItemFeed(
                 guid=guid[:512],
@@ -156,11 +166,30 @@ def parsear_rss(cuerpo: bytes) -> list[ItemFeed]:
                 titulo=titulo or "(sin titulo)",
                 publicado_at=publicado,
                 resumen=_texto(nodo, "description"),
-                contenido_html=_texto(nodo, "content:encoded"),
+                contenido_html=contenido_html,
                 autor=(_texto(nodo, "dc:creator") or _texto(nodo, "author") or None),
+                imagen_url=_imagen_rss(nodo, contenido_html),
             )
         )
     return items
+
+
+def _imagen_rss(nodo, contenido_html: str | None) -> str | None:
+    """Portada del item. Orden de preferencia: media:content/media:thumbnail
+    (formato Yahoo Media RSS, lo usan hch.tv y canal_11) > <enclosure> de
+    imagen (RSS 2.0 estandar) > primer <img> del cuerpo (fallback para feeds
+    que no marcan la imagen aparte, solo la meten en el HTML)."""
+    media = nodo.find("media:content", NS)
+    if media is not None and (media.get("medium") or "image") == "image" and media.get("url"):
+        return media.get("url")[:1024]
+    thumb = nodo.find("media:thumbnail", NS)
+    if thumb is not None and thumb.get("url"):
+        return thumb.get("url")[:1024]
+    enclosure = nodo.find("enclosure")
+    if enclosure is not None and (enclosure.get("type") or "").startswith("image") and enclosure.get("url"):
+        return enclosure.get("url")[:1024]
+    m = _IMG_SRC.search(contenido_html) if contenido_html else None
+    return m.group(1)[:1024] if m else None
 
 
 def parsear_sitemap_news(cuerpo: bytes) -> list[ItemFeed]:
@@ -181,12 +210,17 @@ def parsear_sitemap_news(cuerpo: bytes) -> list[ItemFeed]:
         publicado = _fecha_iso(_texto(news, "news:publication_date"))
         if not publicado:
             continue
+        # Primera <image:image> del <url> -- los sitemaps de OPSA (La Prensa,
+        # El Heraldo, Diez) la traen siempre, aunque el sitemap nunca tenga
+        # cuerpo. Es la unica forma de conseguir imagen de esas tres fuentes.
+        imagen = nodo.find("image:image/image:loc", NS)
         items.append(
             ItemFeed(
                 guid=loc[:512],
                 url=loc[:1024],
                 titulo=_texto(news, "news:title") or "(sin titulo)",
                 publicado_at=publicado,
+                imagen_url=(imagen.text.strip()[:1024] if imagen is not None and imagen.text else None),
             )
         )
     return items

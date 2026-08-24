@@ -33,10 +33,11 @@ pytestmark = pytest.mark.skipif(not _postgres_reachable(), reason="requiere Post
 AHORA = datetime.now(timezone.utc)
 
 
-def _rss(*fechas_guids) -> bytes:
+def _rss(*fechas_guids, imagen: str | None = None) -> bytes:
+    enclosure = f'<enclosure url="{imagen}" type="image/jpeg"/>' if imagen else ""
     items = "".join(
         f"<item><title>Nota {g}</title><link>https://x.test/{g}</link>"
-        f"<guid>{g}</guid><pubDate>{f.strftime('%a, %d %b %Y %H:%M:%S +0000')}</pubDate></item>"
+        f"<guid>{g}</guid><pubDate>{f.strftime('%a, %d %b %Y %H:%M:%S +0000')}</pubDate>{enclosure}</item>"
         for f, g in fechas_guids
     )
     return f'<?xml version="1.0"?><rss version="2.0"><channel>{items}</channel></rss>'.encode()
@@ -131,6 +132,17 @@ def test_error_no_rompe_la_pasada_y_queda_contado(session: Session, fuente: Fuen
     session.refresh(fuente)
     assert fuente.errores_consecutivos == 1
     assert fuente.ultimo_resultado == "error: HTTP 403"
+
+
+def test_imagen_url_se_persiste(session: Session, fuente: FuenteWeb):
+    cuerpo = _rss((AHORA, "a"), imagen="https://x.test/foto.jpg")
+    service = IngestaPrensaService(session, lambda *a, **k: Descarga(True, cuerpo, None, None))
+
+    service.procesar(fuente)
+
+    assert session.scalar(
+        select(Articulo.imagen_url).where(Articulo.fuente_id == fuente.id)
+    ) == "https://x.test/foto.jpg"
 
 
 def test_etag_solo_se_guarda_despues_de_persistir(session: Session, fuente: FuenteWeb):

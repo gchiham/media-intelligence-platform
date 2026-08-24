@@ -111,6 +111,12 @@ class Articulo(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # ir a buscar el cuerpo a la nota si se lo necesita completo.
     contenido_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     autor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Portada del articulo: media:content/media:thumbnail o <enclosure> en RSS,
+    # <image:image> en el sitemap de Google News, o el primer <img> del cuerpo
+    # como ultimo recurso (ver feeds._imagen_rss). Nunca se descarga la imagen
+    # en si, solo se guarda la URL -- igual que clip_s3_uri en Noticia, servir
+    # el binario es responsabilidad de quien consuma esto.
+    imagen_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     publicado_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

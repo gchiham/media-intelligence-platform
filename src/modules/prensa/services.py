@@ -99,6 +99,7 @@ class IngestaPrensaService:
                     "resumen": item.resumen,
                     "contenido_html": item.contenido_html,
                     "autor": item.autor[:255] if item.autor else None,
+                    "imagen_url": item.imagen_url,
                     "publicado_at": item.publicado_at,
                 }
             )
