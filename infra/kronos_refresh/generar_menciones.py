@@ -23,7 +23,14 @@ TZ = timezone(timedelta(hours=-6))
 TOKEN = "b620f9b089419067ed407c251a567cc7f2eee243d5c3e9e5"
 BASE = "http://32.196.209.233"
 VENTANA_HORAS = 48
-LIMITE = 4000
+# Tope de items por consulta. Estaba en 4000 y el 25-ago la ventana de 48 h ya
+# traia 4382 noticias: el generador truncaba en silencio. Corta por el `ORDER
+# BY fecha_inicio DESC`, asi que lo que se caia era lo mas viejo --fuera de las
+# 24 h que filtra la UI, invisible-- pero con el clipper al dia el volumen de
+# un solo dia se acerca al tope. Subir esto engorda el bundle (~1.6 KB por
+# item); si algun dia pesa demasiado, lo que hay que bajar es VENTANA_HORAS,
+# no esto.
+LIMITE = 8000
 MAX_TRANSCRIPCION = 1500
 
 # codigo en nuestra DB -> (id del catalogo embebido en el bundle, tipo)
