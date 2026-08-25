@@ -50,6 +50,13 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?falta ANTHROPIC_API_KEY en .env}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Segunda cuenta de OpenAI: dos organizaciones distintas, cada una con su
+      # cuota de tokens encolados, que es lo que permite tener dos batches de
+      # segmentacion en vuelo a la vez (ver docs/OPENAI_BATCH_DOS_CUENTAS.md).
+      # Sin esta linea el contenedor no la ve y segment_backlog_batch_openai.py
+      # se queda con una sola cuenta: `Settings` la ignora (no es un campo) y
+      # el fallback de leer el .env no aplica, el .env no entra a la imagen.
+      OPENAI_API_KEY_2: ${OPENAI_API_KEY_2:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       LOCAL_MEDIA_DIR: /data/recordings
       # Ingesta S3 -> Postgres (docs/INGESTION_DESIGN.md). Los scripts de
