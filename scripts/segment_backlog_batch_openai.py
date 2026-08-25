@@ -22,6 +22,7 @@ Uso:
 import argparse
 import os
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -40,11 +41,33 @@ from src.modules.ai.models import (  # noqa: E402
     SegmentationCache,
 )
 from src.modules.ai.openai_batch import OpenAIBatchSegmentationClient, build_chunk_requests
-from src.modules.ai.batch import build_custom_id  # noqa: E402
+from src.modules.ai.batch import build_custom_id, parse_custom_id  # noqa: E402
 from src.modules.ai.client_profiles import cargar_perfiles  # noqa: E402
 from src.modules.ai.repeated_content import RepeatedContentIndex  # noqa: E402
 from src.modules.ai.schemas import Word  # noqa: E402
 from src.modules.recordings.models import EstadoGrabacion, Grabacion, Transcripcion  # noqa: E402
+
+
+def _grabaciones_en_vuelo(session: Session) -> list[uuid.UUID]:
+    """Grabaciones que ya viajan en un batch todavia sin recolectar.
+
+    El filtro de "ya cacheadas" no alcanza: la cache recien se llena en el
+    `--collect`, asi que entre el envio y la recoleccion (hasta 24 h de ventana
+    en la Batch API) las mismas grabaciones vuelven a salir como pendientes. A
+    mano eso se esquivaba con `--offset`; con el cron corriendo solo hace falta
+    que el propio query las excluya, o cada vuelta paga otra vez el mismo
+    trabajo.
+    """
+    abiertos = session.execute(
+        select(SegmentationBatch.rangos).where(
+            SegmentationBatch.estado == EstadoSegmentationBatch.ENVIADO
+        )
+    ).scalars()
+    ids = set()
+    for rangos in abiertos:
+        for custom_id in (rangos or {}):
+            ids.add(parse_custom_id(custom_id)[0])
+    return [uuid.UUID(i) for i in ids]
 
 
 def _pendientes(
@@ -71,6 +94,9 @@ def _pendientes(
         .where(Grabacion.estado == EstadoGrabacion.PROCESADA)
         .where(Grabacion.id.notin_(ya_cacheadas))
     )
+    en_vuelo = _grabaciones_en_vuelo(session)
+    if en_vuelo:
+        stmt = stmt.where(Grabacion.id.notin_(en_vuelo))
     if fecha_desde is not None:
         stmt = stmt.where(Grabacion.fecha_inicio >= fecha_desde)
     if fecha_hasta is not None:

@@ -7,7 +7,10 @@ from src.infrastructure.config import settings
 from src.infrastructure.db.registry import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# El `%` se duplica porque alembic guarda la URL en un ConfigParser con
+# interpolacion: una password con `%` (RDS rota la master sola cada 7 dias
+# y genera simbolos) reventaba el arranque con "invalid interpolation syntax".
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
