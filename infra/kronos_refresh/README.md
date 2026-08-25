@@ -12,7 +12,12 @@ Estos scripts lo mantienen vivo sin el fuente:
 |---|---|---|
 | `generar_menciones.py` | dentro del contenedor backend (`docker exec -i ... python3 -`) | consulta la DB (últimas 48 h, medios mapeados al catálogo del bundle) y emite el JSON con el esquema de 18 campos que la app espera |
 | `parchar_bundle.py` | host | localiza el template literal del `JSON.parse` en el bundle, lo reemplaza, y bumpea `?v=` en `index.html` para reventar caché |
+| — | — | el bundle se resuelve leyendo `index.html`, **no** por nombre fijo: Carlos redespliega con hash nuevo (`index-BUiZHVla.js` → `index-D1FeIfGh.js` el 24-ago) y el parche con el hash viejo murió 16 h en silencio |
 | `refresh.sh` | host, cron de `ubuntu` cada 30 min | orquesta los dos; si la consulta falla o trae <10 menciones, el bundle no se toca |
+
+Del build se heredan tal cual los items que no producimos (`social`,
+`prensa_impresa`); `tv`, `radio` y `prensa_rss` salen de nuestra DB. El parche
+siempre parte del `.orig`, así que correrlo N veces da el mismo resultado.
 
 El esquema de items, el catálogo de medios (`tv-hch`, `radio-globo`, ...) y la
 calibración de `alcance_estimado` (audiencia × 4M) se extrajeron por ingeniería

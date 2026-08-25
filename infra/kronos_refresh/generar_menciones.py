@@ -2,15 +2,18 @@
 
 Corre DENTRO del contenedor del backend (docker exec -i ... python3 - < este
 archivo) porque ahi viven DATABASE_URL y las dependencias. Imprime a stdout el
-array JSON con el MISMO esquema de 18 campos que el build original embebia --
-el frontend no distingue entre sus datos de demo y estos.
+array JSON con el MISMO esquema que el build original embebia (18 campos para
+radio/TV, y la variante sin clip -- con url_nota en vez de media_url -- para
+prensa digital) -- el frontend no distingue entre sus datos de demo y estos.
 
 El esquema y el catalogo de medios se extrajeron por ingenieria inversa del
 bundle (no hay codigo fuente de Kronos en ningun lado: ni GitHub ni el server
 ni local -- solo dist/). Ver infra/kronos_refresh/ en el repo.
 """
+import html
 import json
 import os
+import re
 import sys
 from datetime import timedelta, timezone
 
@@ -40,8 +43,22 @@ MEDIOS = {
     "radio_choluteca": ("radio-choluteca", "radio"),
     "radio_valle": ("radio-valle", "radio"),
     "xy_hrn": ("radio-hrn", "radio"),
+    "radio_progreso": ("radio-progreso", "radio"),
     # sin equivalente en el catalogo del bundle (la app no los conoce):
-    # fm_941, suave_fm, suave_fm_teg, super_100, xy_sps, xy_tgu
+    # canal_10, xy_tgu, fm_941, suave_fm, suave_fm_teg, super_100, xy_sps
+}
+
+# Prensa digital (tabla articulos, ver src/modules/prensa/). El bundle trae sus
+# propios items de prensa pero congelados al 8-ago: parchar_bundle.py se queda
+# con los nuestros y hereda del build solo lo que no producimos (social y
+# prensa impresa).
+MEDIOS_PRENSA = {
+    "la_prensa": "prensa-la-prensa",
+    "el_heraldo": "prensa-el-heraldo",
+    "la_tribuna": "prensa-la-tribuna",
+    "proceso_digital": "prensa-proceso-digital",
+    "tiempo_digital": "prensa-tiempo-digital",
+    "criterio_hn": "prensa-criteriohn",
 }
 
 # audiencia segun el catalogo del bundle; alcance = audiencia * 4M (calibrado:
@@ -71,6 +88,22 @@ WHERE g.fecha_inicio >= now() - interval '{VENTANA_HORAS} hours'
 ORDER BY g.fecha_inicio DESC
 LIMIT {LIMITE}
 """
+
+SQL_PRENSA = f"""
+SELECT a.id::text, m.codigo, a.publicado_at, a.titulo, a.resumen, a.url
+FROM articulos a
+JOIN fuentes_web f ON f.id = a.fuente_id
+JOIN medios m ON m.id = f.medio_id
+WHERE a.publicado_at >= now() - interval '{VENTANA_HORAS} hours'
+ORDER BY a.publicado_at DESC
+LIMIT {LIMITE}
+"""
+
+
+def limpiar_html(texto: str | None) -> str:
+    """El resumen del feed viene con HTML crudo (la ingesta no lo toca a
+    proposito, ver src/modules/prensa/models.py)."""
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", texto or ""))).strip()
 
 
 def main() -> None:
@@ -109,6 +142,33 @@ def main() -> None:
                 "sentimiento": "neutral",
                 "alcance_estimado": round(AUDIENCIA.get(medio_id, AUD_DEFAULT) * 4_000_000 / 100) * 100,
             })
+
+        for aid, codigo, publicado, titulo, resumen, url in conn.execute(text(SQL_PRENSA)):
+            medio_id = MEDIOS_PRENSA.get(codigo)
+            if not medio_id:
+                continue
+            texto = limpiar_html(resumen)
+            if len(texto) > MAX_TRANSCRIPCION:
+                texto = texto[:MAX_TRANSCRIPCION].rsplit(" ", 1)[0] + "…"
+            salida.append({
+                "id": aid,
+                "medio_id": medio_id,
+                "tipo": "prensa_rss",
+                "fecha_hora": publicado.astimezone(TZ).isoformat(timespec="seconds"),
+                "programa": "Web",
+                "titular": limpiar_html(titulo) or "(sin titular)",
+                "transcripcion": texto,
+                "palabras_clave": [],
+                "personas": [],
+                "organizaciones": [],
+                "tema": "Otro",
+                "departamento": "",
+                "municipio": "",
+                "sentimiento": "neutral",
+                "alcance_estimado": round(AUD_DEFAULT * 4_000_000 / 100) * 100,
+                "url_nota": url,
+            })
+
     json.dump(salida, sys.stdout, ensure_ascii=False, separators=(",", ":"))
     print(f"\n{len(salida)} menciones", file=sys.stderr)
 
