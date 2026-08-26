@@ -133,3 +133,23 @@ segmentación cuando lo que pasó fue que mediaCAP dejó de publicar.
 
 La consulta va contra las cuatro tablas del pipeline en la ventana pedida
 (24 h por defecto, 14 días de tope) — ver `src/modules/pipeline/metricas.py`.
+
+### Copia estatica bajo `/kronos/dash/`
+
+Ademas de la ruta del backend, la misma pagina se publica como archivo suelto
+en `/home/ubuntu/kronos-signal/dist/dash/index.html`, que nginx sirve en
+`/kronos/dash/` (el `alias` de `/usr/share/kronos/`, el mismo directorio que se
+actualiza por rsync para el frontend de Kronos).
+
+Funciona sin cambios porque la pagina pide su JSON por ruta absoluta
+(`/api/v1/dash/metricas`) y nginx manda todo lo que no es `/kronos/` al
+backend: mismo origen, misma sesion, mismo token en la query string.
+
+**Es una copia, no un enlace** — el contenedor de nginx monta ese directorio
+`:ro` y un symlink hacia el repo apuntaria fuera del montaje. Si se toca
+`src/api/templates/dash.html` hay que repetir el copy:
+
+```bash
+cp media-intelligence-platform/src/api/templates/dash.html \
+   kronos-signal/dist/dash/index.html
+```
