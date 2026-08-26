@@ -105,3 +105,31 @@ tarball del repo, que se copia a N máquinas.
 Tras el cutover a RDS hubo que repuntarlo: apuntaba al Postgres viejo del
 contenedor, así que una flota lanzada ese día habría escrito miles de noticias
 a una base que producción ya no lee.
+
+## Ver el avance: `GET /dash`
+
+Dashboard de operación de las cuatro etapas (Grabaciones → CHEPITA →
+Segmentación LLM → Clipper), token-gated con el mismo `DASHBOARD_TOKEN` que
+`/news/dashboard` y `/prensa/dashboard`:
+
+```
+http://<host>/dash?token=$DASHBOARD_TOKEN
+```
+
+Contesta de un vistazo la pregunta de siempre — *hasta qué hora tenemos* — con
+un embudo por etapa, una matriz de cobertura hora por hora y una tabla con la
+última hora cubierta por cada medio. El JSON que consume es
+`GET /api/v1/dash/metricas?horas=N&token=…`.
+
+**El eje es `grabaciones.fecha_inicio`, no `created_at`:** lo que se mide es
+hasta qué hora *del aire* llegó cada etapa, no cuándo corrió el cron. Por eso a
+las 09:50 GMT-6 lo normal es ver la última hora cerrada en 08:00 y no en 09:00.
+
+Un medio se marca atrasado contra el medio más adelantado (tolerancia de 2 h),
+no contra el reloj. Cuando sus cuatro etapas llegan igual de lejos se etiqueta
+**"sin grabaciones nuevas"**: no hay nada trabado en el pipeline, lo que falta
+es la captura aguas arriba — la distinción que evita salir a buscar un bug de
+segmentación cuando lo que pasó fue que mediaCAP dejó de publicar.
+
+La consulta va contra las cuatro tablas del pipeline en la ventana pedida
+(24 h por defecto, 14 días de tope) — ver `src/modules/pipeline/metricas.py`.
