@@ -32,3 +32,8 @@ scratchpad/
 # RDS en el servidor de produccion (ver docs/INFRASTRUCTURE.md). No se versiona
 # porque cada entorno tiene el suyo y lleva credenciales por variable.
 docker-compose.override.yml
+
+# Sesiones de Telethon (scripts/telegram_pdf_watcher.py). Dan acceso completo
+# a la cuenta de Telegram del que la autentico: nunca deben commitearse.
+*.session
+*.session-journal
