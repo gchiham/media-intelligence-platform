@@ -16,7 +16,8 @@ Corridas siguientes reusan esa sesion sin pedir nada.
 
 Uso:
     python scripts/telegram_pdf_watcher.py
-    python scripts/telegram_pdf_watcher.py --backfill 50   # baja los ultimos N PDF antes de escuchar
+    python scripts/telegram_pdf_watcher.py --backfill 50     # baja los ultimos N PDF antes de escuchar
+    python scripts/telegram_pdf_watcher.py --desde 2026-08-01 --solo-backfill  # todo un rango, sin quedarse escuchando
 """
 import argparse
 import asyncio
@@ -79,7 +80,19 @@ async def main() -> None:
         default=0,
         help="al arrancar, baja los ultimos N PDF ya publicados en el canal (0 = ninguno)",
     )
+    p.add_argument(
+        "--desde",
+        type=str,
+        default=None,
+        help="baja todos los PDF publicados desde esta fecha (YYYY-MM-DD, UTC) hasta hoy",
+    )
+    p.add_argument(
+        "--solo-backfill",
+        action="store_true",
+        help="baja el historial pedido (--backfill o --desde) y termina, sin quedarse escuchando en vivo",
+    )
     args = p.parse_args()
+    desde = datetime.strptime(args.desde, "%Y-%m-%d").replace(tzinfo=timezone.utc) if args.desde else None
 
     api_id = os.environ.get("TELEGRAM_API_ID")
     api_hash = os.environ.get("TELEGRAM_API_HASH")
@@ -96,7 +109,19 @@ async def main() -> None:
     entidad = await client.get_entity(canal)
     log(f"conectado, escuchando @{canal} -> {destino}")
 
-    if args.backfill:
+    if desde:
+        # Sin limit: recorre hacia atras (mas nuevo -> mas viejo) hasta cruzar
+        # la fecha pedida. offset_date + iter_messages en ese orden es como
+        # Telethon recomienda paginar un rango en vez de adivinar un limite.
+        vistos = 0
+        async for message in client.iter_messages(entidad):
+            if message.date < desde:
+                break
+            if es_pdf(message):
+                await guardar_pdf(client, message, destino)
+                vistos += 1
+        log(f"backfill por fecha listo: {vistos} PDF desde {args.desde}")
+    elif args.backfill:
         vistos = 0
         async for message in client.iter_messages(entidad, limit=args.backfill * 5):
             if es_pdf(message):
@@ -105,6 +130,9 @@ async def main() -> None:
                 if vistos >= args.backfill:
                     break
         log(f"backfill listo: {vistos} PDF")
+
+    if args.solo_backfill:
+        return
 
     @client.on(events.NewMessage(chats=entidad))
     async def on_new_message(event):
