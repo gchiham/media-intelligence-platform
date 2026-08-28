@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from openai import OpenAI  # noqa: E402
+from openai import OpenAI, OpenAIError  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
@@ -39,7 +39,11 @@ from src.modules.ai.models import (  # noqa: E402
     SegmentationBatch,
     SegmentationCache,
 )
-from src.modules.ai.openai_batch import OpenAIBatchSegmentationClient, build_chunk_requests
+from src.modules.ai.openai_batch import (  # noqa: E402
+    BatchRechazado,
+    OpenAIBatchSegmentationClient,
+    build_chunk_requests,
+)
 from src.modules.ai.batch import build_custom_id  # noqa: E402
 from src.modules.ai.client_profiles import cargar_perfiles  # noqa: E402
 from src.modules.ai.repeated_content import RepeatedContentIndex  # noqa: E402
@@ -189,12 +193,20 @@ def submit(
             por_cuenta[cuentas[idx % len(cuentas)]].append(p)
 
         enviados = []
+        rechazados = []
         for cuenta in cuentas:
             grupo = por_cuenta[cuenta]
             if not grupo:
                 continue
             client = OpenAIBatchSegmentationClient(OpenAI(api_key=_key(cuenta)))
-            batch_id = client.submit(grupo)
+            # Una cuenta bloqueada (sin creditos, tope de gasto) no puede
+            # tumbar el batch de la otra: sin esto, la excepcion abortaba
+            # antes del commit y se perdia tambien lo que si se envio.
+            try:
+                batch_id = client.submit(grupo)
+            except (BatchRechazado, OpenAIError) as e:
+                rechazados.append((cuenta, len(grupo), str(e)[:200]))
+                continue
             session.add(
                 SegmentationBatch(
                     anthropic_batch_id=batch_id,
@@ -213,6 +225,12 @@ def submit(
 
     for cuenta, batch_id, n in enviados:
         print(f"batch enviado (cuenta {cuenta}): {batch_id} | {n} chunks")
+    for cuenta, n, motivo in rechazados:
+        print(f"ATENCION -- cuenta {cuenta} RECHAZO {n} chunks: {motivo}", file=sys.stderr)
+    if rechazados and not enviados:
+        # Ninguna cuenta acepto: que el cron lo note por codigo de salida, en
+        # vez de dejar la segmentacion detenida en silencio.
+        raise SystemExit(1)
     print(
         f"total: {len(peticiones)} chunks de {len(filas)} grabaciones "
         f"repartidos en {len(enviados)} batch(es)"

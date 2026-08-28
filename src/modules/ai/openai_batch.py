@@ -14,6 +14,7 @@ scripts/segment_backlog_batch_openai.py); el pipeline normal, leyendo esa
 cache via PrecomputedAnalysisProvider, hace el resto.
 """
 import json
+import time
 
 from src.modules.ai.batch import BatchResults, ChunkRequest, build_custom_id, parse_custom_id
 from src.modules.ai.chunking import chunk_words
@@ -31,6 +32,20 @@ from src.modules.ai.stitching import stitch_por_chunk
 from src.shared.logging_utils import get_logger
 
 logger = get_logger("ai_openai_batch")
+
+# `batches.create()` devuelve un batch en estado `validating`: que no lance no
+# significa que el batch vaya a correr. La validacion pasa a `failed` segundos
+# despues si OpenAI no puede leer el JSONL (tope de gasto alcanzado, cuota de
+# tokens encolados, archivo no visible). Sin esperarla, el submit reporta
+# "batch enviado" para batches que nunca procesaron nada -- y la segmentacion
+# se detiene en silencio. Paso el 2026-08-28: 4 batches seguidos "enviados",
+# los 4 en failed, 141 grabaciones sin segmentar sin una sola linea de error.
+ESPERA_VALIDACION_SEG = 45
+INTERVALO_VALIDACION_SEG = 3
+
+
+class BatchRechazado(RuntimeError):
+    """El batch se creo pero OpenAI lo rechazo al validarlo."""
 
 
 def _build_request_body_boundary(
@@ -184,11 +199,53 @@ class OpenAIBatchSegmentationClient:
             endpoint="/v1/chat/completions",
             completion_window="24h",
         )
+        self._esperar_validacion(batch.id, len(peticiones))
+        return batch.id
+
+    def _esperar_validacion(self, batch_id: str, n_peticiones: int) -> None:
+        """Confirma que el batch paso la validacion antes de darlo por enviado.
+
+        Se queda esperando mientras siga en `validating`, hasta
+        ESPERA_VALIDACION_SEG. Si termina en `failed` lanza BatchRechazado con
+        el motivo real de OpenAI; si sigue validando al agotarse la espera lo
+        loguea como advertencia y lo da por bueno (`collect` lo va a revisar
+        igual), en vez de bloquear el cron indefinidamente.
+        """
+        limite = time.monotonic() + ESPERA_VALIDACION_SEG
+        estado = "validating"
+        while time.monotonic() < limite:
+            batch = self._client.batches.retrieve(batch_id)
+            estado = batch.status
+            if estado != "validating":
+                break
+            time.sleep(INTERVALO_VALIDACION_SEG)
+
+        if estado in ("failed", "expired", "cancelled"):
+            errores = getattr(batch, "errors", None)
+            datos = getattr(errores, "data", None) or []
+            motivo = f"{datos[0].code}: {datos[0].message}" if datos else "sin detalle"
+            logger.error(
+                "batch RECHAZADO en validacion",
+                extra={"extra_fields": {
+                    "batch_id": batch_id, "requests": n_peticiones,
+                    "estado": estado, "motivo": motivo,
+                }},
+            )
+            raise BatchRechazado(f"batch {batch_id} quedo en '{estado}' -- {motivo}")
+
+        if estado == "validating":
+            logger.warning(
+                "batch aun validando al agotarse la espera; se da por enviado",
+                extra={"extra_fields": {"batch_id": batch_id, "requests": n_peticiones}},
+            )
+            return
+
         logger.info(
             "batch enviado",
-            extra={"extra_fields": {"batch_id": batch.id, "requests": len(peticiones)}},
+            extra={"extra_fields": {
+                "batch_id": batch_id, "requests": n_peticiones, "estado": estado,
+            }},
         )
-        return batch.id
 
     def is_ended(self, batch_id: str) -> bool:
         batch = self._client.batches.retrieve(batch_id)
