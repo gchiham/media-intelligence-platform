@@ -17,7 +17,11 @@ Uso:
     python scripts/prensa_pdf_ingest.py --estado
 """
 import argparse
+import json
+import os
+import uuid
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,8 +37,12 @@ from src.infrastructure.config import settings  # noqa: E402
 from src.infrastructure.db import registry  # noqa: F401,E402
 from src.infrastructure.db.engine import get_engine  # noqa: E402
 from src.modules.media.models import Medio  # noqa: E402
-from src.modules.prensa import pdf as pdflib  # noqa: E402
-from src.modules.prensa.models import Edicion  # noqa: E402
+from src.modules.prensa import extraccion, pdf as pdflib  # noqa: E402
+from src.modules.prensa.models import (  # noqa: E402
+    Edicion,
+    NotaImpresa,
+    NotaTraduccion,
+)
 
 BUCKET = settings.clips_bucket
 PREFIJO_PDF = "prensa_pdf"
@@ -220,12 +228,229 @@ def estado(session: Session) -> None:
     _ = total
 
 
+# --------------------------------------------------------------- extraccion
+PREFIJO_BATCH = "prensa_pdf/batches"
+
+
+def _cliente_openai(cuenta: str):
+    from openai import OpenAI
+    if cuenta == "1":
+        return OpenAI(api_key=settings.openai_api_key.get_secret_value())
+    k = os.environ.get("OPENAI_API_KEY_2")
+    if not k:
+        ruta = Path(__file__).parent.parent / ".env"
+        for linea in ruta.read_text(encoding="utf-8").splitlines():
+            if linea.startswith("OPENAI_API_KEY_2="):
+                k = linea.split("=", 1)[1].strip()
+    return OpenAI(api_key=k)
+
+
+def _subir_y_crear(cliente, jsonl: bytes, etiqueta: str) -> str:
+    """Sube el JSONL, crea el batch y CONFIRMA que paso la validacion.
+
+    `batches.create()` devuelve el batch en `validating`: que no lance no
+    significa que vaya a correr. Sin esperar, se reporta enviado un batch que
+    fallo -- el mismo problema que tenia la segmentacion de audio.
+    """
+    subida = cliente.files.create(file=(f"{etiqueta}.jsonl", jsonl), purpose="batch")
+    for _ in range(30):
+        if cliente.files.retrieve(subida.id).status == "processed":
+            break
+        time.sleep(2)
+    time.sleep(3)
+    b = cliente.batches.create(
+        input_file_id=subida.id, endpoint="/v1/chat/completions", completion_window="24h"
+    )
+    limite = time.monotonic() + 45
+    estado = "validating"
+    while time.monotonic() < limite:
+        actual = cliente.batches.retrieve(b.id)
+        estado = actual.status
+        if estado != "validating":
+            break
+        time.sleep(3)
+    if estado in ("failed", "expired", "cancelled"):
+        datos = getattr(getattr(actual, "errors", None), "data", None) or []
+        motivo = f"{datos[0].code}: {datos[0].message}" if datos else "sin detalle"
+        raise RuntimeError(f"batch {b.id} quedo en {estado} -- {motivo}")
+    return b.id
+
+
+def extraer(session: Session, directorio: Path, limite: int | None) -> None:
+    """Manda a extraer las ediciones que todavia no tienen notas.
+
+    Una request por edicion (no por chunk): un periodico entero son ~16K tokens
+    de entrada en markdown, comodo dentro de la ventana, y partirlo obligaria a
+    recomponer notas cortadas en el limite.
+    """
+    s3 = _s3()
+    pendientes = list(session.scalars(
+        select(Edicion).where(Edicion.extraido_at.is_(None)).order_by(Edicion.fecha_edicion.desc())
+    ))
+    if limite:
+        pendientes = pendientes[:limite]
+    if not pendientes:
+        log("no hay ediciones pendientes de extraer")
+        return
+
+    peticiones, mapa = [], {}
+    for ed in pendientes:
+        ruta = directorio / Path(ed.s3_pdf_key).parent.name / Path(ed.s3_pdf_key).name
+        if not ruta.exists():
+            log(f"falta el PDF local, se salta: {ruta.name}")
+            continue
+        md = pdflib.leer(ruta).markdown
+        if not md.strip():
+            log(f"sin texto extraible, se salta: {ruta.name}")
+            continue
+        peticiones.append(extraccion.peticion_extraccion(str(ed.id), md))
+        mapa[str(ed.id)] = ruta.name
+    if not peticiones:
+        log("nada que mandar")
+        return
+
+    cuentas = ["1", "2"]
+    mitad = (len(peticiones) + 1) // 2
+    grupos = [peticiones[:mitad], peticiones[mitad:]]
+    for cuenta, grupo in zip(cuentas, grupos):
+        if not grupo:
+            continue
+        cliente = _cliente_openai(cuenta)
+        bid = _subir_y_crear(cliente, extraccion.a_jsonl(grupo), f"extraccion_{cuenta}")
+        s3.put_object(
+            Bucket=BUCKET, Key=f"{PREFIJO_BATCH}/{bid}.json",
+            Body=json.dumps({
+                "tipo": "extraccion", "cuenta": cuenta, "batch_id": bid,
+                "modelo": extraccion.MODELO_EXTRACCION,
+                "prompt_version": extraccion.PROMPT_VERSION,
+                "ediciones": {p.custom_id.split("|")[1]: mapa[p.custom_id.split("|")[1]] for p in grupo},
+            }, ensure_ascii=False).encode(),
+            ContentType="application/json",
+        )
+        log(f"batch extraccion enviado (cuenta {cuenta}): {bid} | {len(grupo)} ediciones")
+
+
+def recolectar(session: Session) -> None:
+    """Levanta los batches terminados y guarda las notas.
+
+    Idempotente por (edicion_id, indice): re-recolectar el mismo batch no
+    duplica. El manifiesto en S3 se borra solo cuando todo se guardo bien, asi
+    que un fallo a mitad se reintenta en la corrida siguiente.
+    """
+    s3 = _s3()
+    manifiestos = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"{PREFIJO_BATCH}/").get("Contents", [])
+    if not manifiestos:
+        log("no hay batches pendientes de recolectar")
+        return
+
+    for obj in manifiestos:
+        man = json.loads(s3.get_object(Bucket=BUCKET, Key=obj["Key"])["Body"].read())
+        cliente = _cliente_openai(man["cuenta"])
+        b = cliente.batches.retrieve(man["batch_id"])
+        if b.status not in ("completed", "failed", "expired", "cancelled"):
+            log(f"{man['batch_id'][:24]} aun {b.status} ({b.request_counts.completed}/{b.request_counts.total})")
+            continue
+        if b.status != "completed":
+            log(f"ATENCION {man['batch_id'][:24]} termino en {b.status}; se deja el manifiesto para revisar")
+            continue
+
+        crudo = cliente.files.content(b.output_file_id).text
+        guardadas = fallidas = 0
+        for linea in crudo.splitlines():
+            if not linea.strip():
+                continue
+            r = json.loads(linea)
+            tipo, ident = r["custom_id"].split("|", 1)
+            cuerpo = r.get("response", {}).get("body", {})
+            msg = (cuerpo.get("choices") or [{}])[0].get("message", {}).get("content")
+            if not msg:
+                fallidas += 1
+                continue
+            datos = json.loads(msg)
+            if tipo == "ext":
+                guardadas += _guardar_notas(session, ident, datos, man, cuerpo.get("usage", {}))
+            elif tipo == "trad":
+                guardadas += _guardar_traduccion(session, ident, datos, man)
+        session.commit()
+        log(f"{man['batch_id'][:24]} {man['tipo']}: {guardadas} guardadas, {fallidas} sin respuesta")
+        s3.put_object(Bucket=BUCKET, Key=obj["Key"].replace(PREFIJO_BATCH, PREFIJO_BATCH + "/hechos"),
+                      Body=json.dumps(man).encode(), ContentType="application/json")
+
+
+def _guardar_notas(session: Session, edicion_id: str, datos: dict, man: dict, usage: dict) -> int:
+    ed = session.get(Edicion, uuid.UUID(edicion_id))
+    if ed is None:
+        return 0
+    ya = {n.indice for n in session.scalars(
+        select(NotaImpresa).where(NotaImpresa.edicion_id == ed.id))}
+    n = 0
+    for i, nota in enumerate(datos.get("notas", [])):
+        if i in ya:
+            continue
+        session.add(NotaImpresa(
+            edicion_id=ed.id, indice=i,
+            titulo=nota["titulo"][:2000], sumario=nota.get("sumario"),
+            cuerpo=nota["cuerpo"], seccion=(nota.get("seccion") or None),
+            paginas=nota.get("paginas") or [],
+        ))
+        n += 1
+    ed.extraido_at = datetime.now(timezone.utc)
+    ed.modelo = man.get("modelo")
+    ed.prompt_version = man.get("prompt_version")
+    ed.tokens_entrada = usage.get("prompt_tokens")
+    ed.tokens_salida = usage.get("completion_tokens")
+    return n
+
+
+def _guardar_traduccion(session: Session, nota_id: str, datos: dict, man: dict) -> int:
+    nota = session.get(NotaImpresa, uuid.UUID(nota_id))
+    if nota is None:
+        return 0
+    existe = session.scalar(select(NotaTraduccion).where(
+        NotaTraduccion.nota_id == nota.id, NotaTraduccion.idioma == "en"))
+    if existe:
+        return 0
+    session.add(NotaTraduccion(
+        nota_id=nota.id, idioma="en",
+        titulo=datos["title"], sumario=datos.get("summary"), cuerpo=datos.get("body"),
+        modelo=man.get("modelo"), traducido_at=datetime.now(timezone.utc),
+    ))
+    return 1
+
+
+def traducir(session: Session, limite: int | None) -> None:
+    """Manda a traducir TODAS las notas que aun no tienen version en ingles."""
+    s3 = _s3()
+    ya = select(NotaTraduccion.nota_id).where(NotaTraduccion.idioma == "en")
+    pend = list(session.scalars(
+        select(NotaImpresa).where(NotaImpresa.id.notin_(ya)).limit(limite or 5000)))
+    if not pend:
+        log("no hay notas pendientes de traducir")
+        return
+    peticiones = [extraccion.peticion_traduccion(str(n.id), n.titulo, n.cuerpo) for n in pend]
+    mitad = (len(peticiones) + 1) // 2
+    for cuenta, grupo in zip(["1", "2"], [peticiones[:mitad], peticiones[mitad:]]):
+        if not grupo:
+            continue
+        cliente = _cliente_openai(cuenta)
+        bid = _subir_y_crear(cliente, extraccion.a_jsonl(grupo), f"traduccion_{cuenta}")
+        s3.put_object(
+            Bucket=BUCKET, Key=f"{PREFIJO_BATCH}/{bid}.json",
+            Body=json.dumps({"tipo": "traduccion", "cuenta": cuenta, "batch_id": bid,
+                             "modelo": extraccion.MODELO_TRADUCCION}).encode(),
+            ContentType="application/json")
+        log(f"batch traduccion enviado (cuenta {cuenta}): {bid} | {len(grupo)} notas")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dir", type=Path, default=Path("/data/telegram_pdfs"))
     p.add_argument("--registrar", action="store_true")
     p.add_argument("--render", action="store_true")
     p.add_argument("--estado", action="store_true")
+    p.add_argument("--extraer", action="store_true")
+    p.add_argument("--recolectar", action="store_true")
+    p.add_argument("--traducir", action="store_true")
     p.add_argument("--limite", type=int, default=None)
     p.add_argument(
         "--procesos", type=int, default=1,
@@ -240,6 +465,12 @@ def main() -> int:
             registrar(session, a.dir, a.dry_run)
         if a.render:
             render(session, a.dir, a.limite, a.procesos)
+        if a.extraer:
+            extraer(session, a.dir, a.limite)
+        if a.recolectar:
+            recolectar(session)
+        if a.traducir:
+            traducir(session, a.limite)
         if a.estado:
             estado(session)
     return 0
