@@ -20,6 +20,11 @@ dependencies = [
     "defusedxml>=0.7",
     "openai>=1.50",
     "anthropic>=0.40",
+    # Prensa impresa: extraccion de texto y renderizado de paginas de los PDF
+    # de periodico (src/modules/prensa/pdf.py). Se usa pdfplumber y no pypdf
+    # porque hace falta el TAMANO DE FUENTE para distinguir titulares del
+    # cuerpo, y las coordenadas para el orden de lectura.
+    "pdfplumber>=0.11",
     # Userbot de Telegram (scripts/telegram_pdf_watcher.py) -- lee canales
     # publicos de terceros donde no tenemos rol de admin, asi que el Bot API
     # no sirve (solo recibe channel_post si el bot es admin del canal).
