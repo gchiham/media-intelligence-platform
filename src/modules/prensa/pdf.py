@@ -228,6 +228,12 @@ def leer(ruta: Path) -> Lectura:
                 con.append(i)
             else:
                 sin.append(i)
+            # pdfplumber cachea los objetos parseados de CADA pagina y no los
+            # suelta al avanzar: sin esto el proceso crecio a 1.28 GB y el
+            # kernel lo mato al noveno periodico (el backend corre en un
+            # t3.small de 1.9 GB). Medido el 2026-08-29.
+            page.flush_cache()
+            page.get_textmap.cache_clear()
     return Lectura("\n\n".join(trozos), total, con, sin)
 
 
@@ -237,9 +243,13 @@ def render_pagina(ruta: Path, numero: int, dpi: int = DPI_PAGINA) -> bytes:
     No se puede servir el PDF completo: los de La Tribuna llegan a 86 MB.
     """
     with pdfplumber.open(ruta) as pdf:
-        imagen = pdf.pages[numero - 1].to_image(resolution=dpi)
+        page = pdf.pages[numero - 1]
+        imagen = page.to_image(resolution=dpi)
         buf = io.BytesIO()
         imagen.original.convert("RGB").save(
             buf, "JPEG", quality=CALIDAD_JPEG, optimize=True
         )
+        # Mismo motivo que en leer(): renderizar 40 paginas seguidas sin soltar
+        # la cache de pdfplumber revienta la memoria del t3.small.
+        page.flush_cache()
         return buf.getvalue()

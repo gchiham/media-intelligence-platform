@@ -101,7 +101,10 @@ def registrar(session: Session, directorio: Path, dry_run: bool) -> int:
                 origen_url=_origen(ruta.name),
             )
         )
-    if not dry_run:
+        # Commit por edicion, no uno solo al final: leer 70 PDF tarda ~20 min y
+        # el proceso ya murio por OOM a la novena. Con un commit global se
+        # perdia TODO el trabajo; asi lo hecho queda, y re-correr salta lo que
+        # ya esta por sha256.
         session.commit()
     log(
         f"registradas: {nuevos} | repetidas (sha256): {saltados} | "
