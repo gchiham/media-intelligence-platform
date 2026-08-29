@@ -18,6 +18,7 @@ Uso:
 """
 import argparse
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -121,26 +122,19 @@ def _origen(nombre: str) -> str | None:
     return f"https://t.me/{canal}/{ident}" if ident.isdigit() else None
 
 
-def render(session: Session, directorio: Path, limite: int | None) -> None:
-    """Sube cada pagina como JPEG para que el front pueda mostrarla.
+def _render_una(args: tuple[str, str, int]) -> tuple[str, int, int, str]:
+    """Renderiza y sube las paginas de UNA edicion. Corre en su propio proceso.
 
-    Renderiza TODAS las paginas, no solo las que tienen notas: el usuario que
-    abre la pagina 5 va a querer hojear la 4 y la 6, y el costo en S3 es
-    despreciable frente a tener que volver a abrir el PDF.
+    Recibe y devuelve solo tipos simples porque tiene que viajar por pickle
+    entre procesos; abre su propio cliente de S3 por lo mismo.
     """
-    s3 = _s3()
-    ediciones = list(session.scalars(select(Edicion).order_by(Edicion.fecha_edicion.desc())))
-    if limite:
-        ediciones = ediciones[:limite]
-
-    for ed in ediciones:
-        ruta = directorio / Path(ed.s3_pdf_key).parent.name / Path(ed.s3_pdf_key).name
-        if not ruta.exists():
-            log(f"no esta el archivo local, se salta: {ruta.name}")
-            continue
+    edicion_id, ruta_str, paginas_total = args
+    ruta = Path(ruta_str)
+    try:
+        s3 = _s3()
         hechas = saltadas = 0
-        for n in range(1, ed.paginas_total + 1):
-            key = f"{PREFIJO_PAGINAS}/{ed.id}/{n:03d}.jpg"
+        for n in range(1, paginas_total + 1):
+            key = f"{PREFIJO_PAGINAS}/{edicion_id}/{n:03d}.jpg"
             try:
                 s3.head_object(Bucket=BUCKET, Key=key)
                 saltadas += 1
@@ -153,7 +147,59 @@ def render(session: Session, directorio: Path, limite: int | None) -> None:
                 ContentType="image/jpeg",
             )
             hechas += 1
-        log(f"{ed.fecha_edicion} {ruta.name[:40]:42} {hechas} paginas nuevas, {saltadas} ya estaban")
+        return (ruta.name, hechas, saltadas, "")
+    except Exception as e:  # noqa: BLE001
+        # Un PDF que falle no puede tumbar el lote entero: con 70 archivos, que
+        # el numero 9 reviente y se pierda todo lo demas es inaceptable.
+        return (ruta.name, 0, 0, f"{type(e).__name__}: {str(e)[:90]}")
+
+
+def render(session: Session, directorio: Path, limite: int | None, procesos: int) -> None:
+    """Sube cada pagina como JPEG para que el front pueda mostrarla.
+
+    Renderiza TODAS las paginas, no solo las que tienen notas: el usuario que
+    abre la pagina 5 va a querer hojear la 4 y la 6, y el costo en S3 es
+    despreciable frente a tener que volver a abrir el PDF.
+
+    **`--procesos` usa PROCESOS y no hilos, a proposito.** pdfplumber (via
+    pypdfium2) no es thread-safe: con 8 hilos abriendo PDF a la vez el estado
+    se corrompe entre ellos y tira `MalformedPDFException: Data format error`,
+    que hace creer que el archivo esta danado cuando no lo esta -- los mismos
+    70 PDF abren perfecto de a uno. Paso el 2026-08-29.
+
+    El default es 1 porque el backend de produccion es un t3.small de 2 vCPU
+    que suele tener los creditos de CPU en cero y ya corre el clipper: subirle
+    el paralelismo ahi degrada el pipeline. Para el backlog conviene una
+    instancia temporal grande (con 8 procesos, 2.166 paginas tardaron 4 min).
+    """
+    ediciones = list(session.scalars(select(Edicion).order_by(Edicion.fecha_edicion.desc())))
+    if limite:
+        ediciones = ediciones[:limite]
+
+    trabajos: list[tuple[str, str, int]] = []
+    for ed in ediciones:
+        ruta = directorio / Path(ed.s3_pdf_key).parent.name / Path(ed.s3_pdf_key).name
+        if not ruta.exists():
+            log(f"no esta el archivo local, se salta: {ruta.name}")
+            continue
+        trabajos.append((str(ed.id), str(ruta), ed.paginas_total))
+
+    log(f"{len(trabajos)} ediciones a renderizar, {procesos} proceso(s)")
+    if procesos > 1:
+        with ProcessPoolExecutor(procesos) as ex:
+            resultados = list(ex.map(_render_una, trabajos))
+    else:
+        resultados = [_render_una(t) for t in trabajos]
+
+    nuevas = errores = 0
+    for nombre, hechas, saltadas, error in resultados:
+        if error:
+            errores += 1
+            log(f"ERROR {nombre[:40]:42} {error}")
+        else:
+            nuevas += hechas
+            log(f"{nombre[:40]:42} {hechas} paginas nuevas, {saltadas} ya estaban")
+    log(f"paginas subidas: {nuevas} | ediciones con error: {errores}")
 
 
 def estado(session: Session) -> None:
@@ -181,6 +227,11 @@ def main() -> int:
     p.add_argument("--render", action="store_true")
     p.add_argument("--estado", action="store_true")
     p.add_argument("--limite", type=int, default=None)
+    p.add_argument(
+        "--procesos", type=int, default=1,
+        help="procesos para --render. 1 en produccion (t3.small de 2 vCPU sin "
+             "creditos); subirlo solo en una instancia temporal grande",
+    )
     p.add_argument("--dry-run", action="store_true", help="con --registrar: no escribe")
     a = p.parse_args()
 
@@ -188,7 +239,7 @@ def main() -> int:
         if a.registrar:
             registrar(session, a.dir, a.dry_run)
         if a.render:
-            render(session, a.dir, a.limite)
+            render(session, a.dir, a.limite, a.procesos)
         if a.estado:
             estado(session)
     return 0
