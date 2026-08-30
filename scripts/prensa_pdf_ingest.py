@@ -230,6 +230,21 @@ def estado(session: Session) -> None:
 
 # --------------------------------------------------------------- extraccion
 PREFIJO_BATCH = "prensa_pdf/batches"
+# Cuentas de OpenAI utilizables para batches. La 1 viene rechazando TODO batch
+# con "Cannot find file ... organization does not have access to it" desde el
+# 2026-08-28 -- creditos hay (las llamadas sincronas pasan), es el Batch API de
+# esa organizacion. Afecta tambien a la segmentacion de audio, que corre a la
+# mitad de capacidad. Mientras no se resuelva del lado de OpenAI, aca se usa
+# solo la 2; volver a poner "1" cuando se arregle.
+CUENTAS_BATCH = ["2"]
+
+
+def _repartir(peticiones: list) -> list[tuple[str, list]]:
+    """Reparte las peticiones entre las cuentas utilizables."""
+    n = len(CUENTAS_BATCH)
+    grupos = [peticiones[i::n] for i in range(n)]
+    return [(c, g) for c, g in zip(CUENTAS_BATCH, grupos) if g]
+
 
 
 def _cliente_openai(cuenta: str):
@@ -309,14 +324,13 @@ def extraer(session: Session, directorio: Path, limite: int | None) -> None:
         log("nada que mandar")
         return
 
-    cuentas = ["1", "2"]
-    mitad = (len(peticiones) + 1) // 2
-    grupos = [peticiones[:mitad], peticiones[mitad:]]
-    for cuenta, grupo in zip(cuentas, grupos):
-        if not grupo:
-            continue
+    for cuenta, grupo in _repartir(peticiones):
         cliente = _cliente_openai(cuenta)
-        bid = _subir_y_crear(cliente, extraccion.a_jsonl(grupo), f"extraccion_{cuenta}")
+        try:
+            bid = _subir_y_crear(cliente, extraccion.a_jsonl(grupo), f"extraccion_{cuenta}")
+        except RuntimeError as e:
+            log(f"cuenta {cuenta} RECHAZO el batch: {e}")
+            continue
         s3.put_object(
             Bucket=BUCKET, Key=f"{PREFIJO_BATCH}/{bid}.json",
             Body=json.dumps({
@@ -428,12 +442,13 @@ def traducir(session: Session, limite: int | None) -> None:
         log("no hay notas pendientes de traducir")
         return
     peticiones = [extraccion.peticion_traduccion(str(n.id), n.titulo, n.cuerpo) for n in pend]
-    mitad = (len(peticiones) + 1) // 2
-    for cuenta, grupo in zip(["1", "2"], [peticiones[:mitad], peticiones[mitad:]]):
-        if not grupo:
-            continue
+    for cuenta, grupo in _repartir(peticiones):
         cliente = _cliente_openai(cuenta)
-        bid = _subir_y_crear(cliente, extraccion.a_jsonl(grupo), f"traduccion_{cuenta}")
+        try:
+            bid = _subir_y_crear(cliente, extraccion.a_jsonl(grupo), f"traduccion_{cuenta}")
+        except RuntimeError as e:
+            log(f"cuenta {cuenta} RECHAZO el batch: {e}")
+            continue
         s3.put_object(
             Bucket=BUCKET, Key=f"{PREFIJO_BATCH}/{bid}.json",
             Body=json.dumps({"tipo": "traduccion", "cuenta": cuenta, "batch_id": bid,
